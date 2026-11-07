@@ -127,6 +127,22 @@ http://helix-light-brain:6305
 
 Ellers brug værtens IP og port 6305.
 
+## CPU eller GPU
+
+Standard er CPU. `docker compose up -d` virker på en maskine uden
+NVIDIA-kort — hjernen er ren Python, Postgres og spaCy, og Ollama kører
+bge-m3 på CPU'en.
+
+Har værten et NVIDIA-kort, så start med override-filen:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+```
+
+Så lægges bge-m3 på kortet, og indekseringen bliver markant hurtigere.
+Er kortet ikke nummer 0, ret `NVIDIA_VISIBLE_DEVICES` i
+`docker-compose.gpu.yml`.
+
 ## Data
 
 Alt data ligger i volumes og følger ikke med image'et:

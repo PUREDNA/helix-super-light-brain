@@ -1,0 +1,15 @@
+# GPU-override. Kun for værter med et NVIDIA-kort.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+#
+# Uden den kører alt på CPU. Med den lægger Ollama bge-m3 på kortet, og
+# indekseringen bliver markant hurtigere.
+#
+# Tilpas NVIDIA_VISIBLE_DEVICES hvis kortet ikke er nummer 0.
+
+services:
+  super-light-brain:
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=0
+      - NVIDIA_DRIVER_CAPABILITIES=all
+    runtime: nvidia

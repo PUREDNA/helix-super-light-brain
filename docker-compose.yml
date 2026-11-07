@@ -1,7 +1,9 @@
 # Super Light Brain — én container, ingen andre tjenester.
 #
-#   docker compose build
 #   docker compose up -d
+#
+# Virker på CPU alene. Har værten et NVIDIA-kort, så brug override-filen
+# ved siden af (docker-compose.gpu.yml) for at lade Ollama bruge det.
 #
 # Porte:
 #   6305  konklusionsmotoren (+ semantisk søgning)  <- den man kobler OpenWebUI på
@@ -28,9 +30,6 @@ services:
       - "6305:6305"
     environment:
       - TZ=Europe/Lisbon
-      # ponytail: én GPU til hjernen. Fjern linjen hvis værten kun har ét kort.
-      - NVIDIA_VISIBLE_DEVICES=0
-      - NVIDIA_DRIVER_CAPABILITIES=all
       - DROM_OLLAMA_HOST=host.docker.internal
       - DROM_MODEL=H.E.L.I.X:9b-neo-150k
       - DROM_LAER_INTERVAL=3600
@@ -48,7 +47,8 @@ services:
       - brain_obsidian:/vault
     networks:
       - brain_net
-    runtime: nvidia
+    # ponytail: ingen runtime: nvidia her — ellers nægter Docker at starte
+    # containeren på en maskine uden NVIDIA. GPU er en override, ikke et krav.
 
 networks:
   brain_net:
