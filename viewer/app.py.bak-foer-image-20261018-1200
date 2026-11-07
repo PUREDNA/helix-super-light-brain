@@ -1,0 +1,694 @@
+#!/usr/bin/env python3
+"""Helix Graph Viewer backend — læser Apache AGE-grafen fra Postgres
+(AGE 1.7) og serverer nodes/edges som JSON til et let web-UI.
+Read-only (SELECT/cypher). Rører aldrig data.
+"""
+import json
+import os
+
+import psycopg2
+from flask import Flask, jsonify, send_from_directory
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+STATIC_DIR = os.path.join(BASE_DIR, "static")
+
+app = Flask(__name__, static_folder=STATIC_DIR)
+
+# Nulstil den generiske catch-all route som static_url_path="/" opretter,
+# så vores egen "/" og "/<file>" håndterer index.html korrekt.
+@app.route("/")
+def index():
+    return send_from_directory(STATIC_DIR, "index.html")
+
+
+@app.route("/<path:filename>")
+def serve_files(filename):
+    """Server øvrige statiske filer (js/css), men lad /api/* gå til API-routes."""
+    if filename.startswith("api/"):
+        # Flask matcher allerede /api/graph som en mere specifik route først;
+        # hvis vi når hertil, er det en ukendt api-sti.
+        return jsonify({"error": "not found"}), 404
+    return send_from_directory(STATIC_DIR, filename)
+
+
+# ------------------------------------------------------------------ noterne (Ops)
+# Vieweren kobles til Ops-tjenesten (Obsidian, port 6122), så DNA kan se sine
+# noter inde i grafen. Vi taler med den over HTTP — vi læser ikke vaulten selv,
+# og vi rører ingenting. Kun GET.
+import urllib.parse
+import urllib.request
+
+from flask import request
+
+OPS_URL = os.environ.get("OPS_URL", "http://127.0.0.1:6122")
+
+# DNA 2026-10-16: disse to nodetyper er gamle datatabel-kort (fra før hjernerne
+# blev samlet) og har ingen funktion i grafen. De fjernes fra VIEWEREN (ikke fra
+# basen) — de ligger bare bagved og kommer ikke frem.
+SKJULTE_LABELS = {"DbTabel", "DbBoble"}
+
+
+def _skal_skjules(label: str) -> bool:
+    return label in SKJULTE_LABELS
+
+
+def _ops(sti: str, tid: int = 15):
+    """Hent noget fra Ops. Returnerer (data, fejl)."""
+    try:
+        with urllib.request.urlopen(OPS_URL + sti, timeout=tid) as svar:
+            return json.loads(svar.read().decode("utf-8")), None
+    except Exception as fejl:
+        return None, f"{type(fejl).__name__}: {fejl}"
+
+
+@app.route("/api/noter")
+def api_noter():
+    """Noterne fra Ops — med valgfrit filter (?q=)."""
+    d, fejl = _ops("/api/ops")
+    if fejl:
+        return jsonify({"fejl": fejl, "noter": [], "antal": 0}), 502
+    q = (request.args.get("q") or "").strip().lower()
+    noter = []
+    for n in (d or {}).get("nodes", []):
+        if n.get("type") != "note":
+            continue
+        sti = n.get("id") or ""
+        navn = n.get("label") or sti
+        gruppe = n.get("group") or ""
+        if q and q not in f"{navn} {sti} {gruppe}".lower():
+            continue
+        noter.append({"sti": sti, "navn": navn, "gruppe": gruppe,
+                      "mappe": n.get("age") or ""})
+    noter.sort(key=lambda n: (n["gruppe"], n["navn"]))
+    return jsonify({"antal": len(noter), "noter": noter,
+                    "vault": os.environ.get("OPS_VAULT", "/vault")})
+
+
+@app.route("/api/note")
+def api_note():
+    """Én notes tekst — hentet hos Ops (?sti=)."""
+    sti = (request.args.get("sti") or "").strip()
+    if not sti:
+        return jsonify({"fejl": "sti mangler"}), 400
+    if not sti.lower().endswith(".md"):
+        sti += ".md"
+    d, fejl = _ops("/api/ops_note?sti=" + urllib.parse.quote(sti))
+    if fejl:
+        return jsonify({"fejl": fejl}), 502
+    return jsonify(d or {})
+
+DB_HOST = os.environ.get("DB_HOST", "postgres")
+DB_PORT = int(os.environ.get("DB_PORT", "5432"))
+DB_NAME = os.environ.get("DB_NAME", "hjerne")
+DB_USER = os.environ.get("DB_USER", "hjerne")
+DB_PASS = os.environ.get("DB_PASS", "")
+GRAPH = os.environ.get("GRAPH", "hjerne")
+# DEN GAMLE GRAF — viewer'ens anden graf-database ("Efterforskning"-visningen).
+# Samme mønster som den gamle viewer: nodens egne egenskaber styrer panelet.
+EFTER_DB_NAME = os.environ.get("EFTER_DB_NAME", "gammel_graf")
+EFTER_GRAPH = os.environ.get("EFTER_GRAF", "juridiske_sager")
+# Udgangspunkt: hent HELE grafen (alle noder) så DNA ser det fulde billede fra start.
+# De interne Periode->Periode-kanter (48.533 stk.) er et tungt tids-skelet der får
+# browseren til at crashe (40.000+ kanter kan ikke tegnes flydende). De udelades
+# i standardvisningen; kun de meningsfulde kanter (~3.500) beholdes. DNA kan stadig
+# skrue ned med toggles.
+MAX_NODES = int(os.environ.get("MAX_NODES", "5500"))
+MAX_EDGES = int(os.environ.get("MAX_EDGES", "8000"))
+
+
+def get_conn():
+    """Åbn en forbindelse og indlæs AGE-udvidelsen med det samme.
+
+    Uden LOAD 'age' kender forbindelsen ikke cypher()-funktionen, og hvert
+    kald fejler med \"unhandled cypher(cstring) function call\". Vi sætter også
+    søgestien, så vores egne tabeller i public kan ses.
+    """
+    c = psycopg2.connect(
+        host=DB_HOST, port=DB_PORT, dbname=DB_NAME,
+        user=DB_USER, password=DB_PASS, connect_timeout=5,
+    )
+    c.autocommit = True
+    cur = c.cursor()
+    try:
+        cur.execute("LOAD 'age'")
+    except Exception:
+        pass
+    cur.execute("SET search_path = ag_catalog, public")
+    return c
+
+
+def get_conn_efter():
+    """Forbindelse til DEN GAMLE GRAF (sin egen database).
+
+    Samme opsætning som get_conn, blot en anden database. Bruges af
+    /api/efterforskning, så viewer'en ser begge graf-databaser.
+    """
+    c = psycopg2.connect(
+        host=DB_HOST, port=DB_PORT, dbname=EFTER_DB_NAME,
+        user=DB_USER, password=DB_PASS, connect_timeout=5,
+    )
+    c.autocommit = True
+    cur = c.cursor()
+    try:
+        cur.execute("LOAD 'age'")
+    except Exception:
+        pass
+    cur.execute("SET search_path = ag_catalog, public")
+    return c
+
+
+def _first_text(d, keys):
+    """Hent første tilstedeværende property som display-tekst.
+
+    DNA's struktur (2026-09-29): navnefelterne er delt i kategorier
+    (navn_alias, navn_fuldt, navn_fornavn ...). Vi leder derfor BÅDE i de
+    flade nøgler OG i alle felter der starter med samme præfiks
+    ('navn' -> navn_alias, navn_fuldt osv.). Fundamentet røres ikke;
+    læseren følger strukturen.
+    """
+    if not isinstance(d, dict):
+        return None
+    for k in keys:
+        if k in d and d[k]:
+            return str(d[k])
+        # kategori-felter: <nøgle>_<felt>
+        præfiks = k + "_"
+        for pk in d:
+            if pk.startswith(præfiks) and d[pk]:
+                return str(d[pk])
+    return None
+
+
+def _group_age(props_dict, label):
+    """DNA 2026-10-16: domæne/label-trappen skal svare til grafen.
+
+    Domænet (group, forælderen i sidepanelet) er:
+      domene  -> ellers kategori -> ellers (navn hvis det er en Domene-knude) -> label
+    Labelen (age, barnet) er:
+      kategori når noden BÅDE har domene og kategori (fx personer/Sagsbehandler),
+      ellers label (typen: Konklusion, Emne, Person ...).
+    Så 'Samtalen' (og Grafen, Maskinen, Projekterne, Noterne) bliver egne
+    domæner man kan tænde/slukke — i stedet for at gemme sig som etiketter
+    under 'Konklusion'/'Emne'.
+    """
+    domene = (props_dict.get("domene") if isinstance(props_dict, dict) else None) or ""
+    kategori = (props_dict.get("kategori") if isinstance(props_dict, dict) else None) or ""
+    navn = _first_text(props_dict, ("navn", "name", "title", "emne", "label")) or ""
+    if domene:
+        return domene, (kategori or label or "?")
+    if kategori:
+        return kategori, (label or "?")
+    if label == "Domene" and navn:
+        return navn, label
+    return (label or "?"), (label or "?")
+
+
+def _parse_node(vid, labs, props):
+    label = ""
+    try:
+        larr = json.loads(labs) if labs else []
+        label = larr[0] if larr else ""
+    except Exception:
+        label = ""
+    props_dict = {}
+    try:
+        props_dict = json.loads(props) if props else {}
+    except Exception:
+        props_dict = {}
+    display = _first_text(props_dict, ("navn", "name", "title", "emne", "label")) or label or "?"
+    group, age = _group_age(props_dict, label)
+    return {
+        "id": str(vid),
+        "label": str(display)[:50],
+        "group": group,
+        "age": age,
+        "role": props_dict.get("rolle") or "",
+        "props": props_dict,
+    }
+
+
+def _parse_edge(row):
+    eid, aid, bid, t = str(row[0]), str(row[1]), str(row[2]), row[3]
+    try:
+        elabel = json.loads(t) if t else ""
+    except Exception:
+        elabel = ""
+    return {"id": eid, "from": aid, "to": bid, "label": elabel or ""}
+
+
+@app.route("/api/search")
+def api_search():
+    """Søg i HELE grafen efter noder hvis navn/emne/label matcher ordet.
+    Returnerer de matchende noder + de kanter der binder dem sammen
+    (uanset om de er i standardudsnittet), så brugeren finder hvad de vil
+    uden om MAX_NODES-udsnittet."""
+    q = (__import__("flask").request.args.get("q") or "").strip()
+    if not q:
+        return jsonify({"nodes": [], "edges": [], "match": False})
+    # Undgå psycopg2/AGE parameter-uklarhed: indsæt søgeteksten som citeret streng
+    # efter at have renset den (kun alfanumerisk + mellemrum). Det er en read-only
+    # CONTAINS-modning, ingen risiko via parameter-indsættelse i SQL/cypher.
+    clean = "".join(ch for ch in q if ch.isalnum() or ch.isspace()).strip()
+    if not clean:
+        return jsonify({"nodes": [], "edges": [], "match": False})
+    c = get_conn()
+    c.autocommit = True
+    cur = c.cursor()
+    cur.execute("SET search_path = ag_catalog, public")
+    try:
+        # Sørg for at den rensede tekst er sikker i en citeret streng (CONTAINS-modning,
+        # read-only). Fjerne enkle anførselstegn for at undgå at bryde citeringen.
+        safe = clean.replace("'", "")
+        # Matcher BÅDE på labels og på ALLE tekst-felter — inkl. DNA's
+        # kategori-felter (navn_alias, navn_fuldt, kontakt_email, relation_børn ...).
+        # Fundamentet er urørt: læseren følger strukturen. AGE 1.7 kan ikke slå
+        # alle properties op på én gang (toString på map → fejl), så felterne
+        # navngives eksplicit.
+        FELTER = [
+            # navn i alle former
+            "navn", "navn_alias", "navn_fuldt", "navn_fornavn", "navn_efternavn",
+            "navn_mellemnavn", "navn_kaelenavn", "navn_praefiks", "navn_suffiks",
+            # klassiske
+            "name", "emne", "title", "label", "note", "beskrivelse_note",
+            "beskrivelse_emne", "beskrivelse_kort", "beskrivelse_rolle",
+            "beskrivelse_personlighed", "beskrivelse_domene",
+            # kontakt og socialt
+            "kontakt_email", "kontakt_telefon", "kontakt_adresse", "kontakt_bopael",
+            "kontakt_arbejdsplads", "kontakt_punkt", "kontakt_fax",
+            "socialt_instagram", "socialt_facebook", "socialt_telegram",
+            "socialt_hjemmeside", "socialt_andet", "socialt_linkedin",
+            "socialt_tiktok", "socialt_youtube",
+            # identitet, personligt, viden
+            "identitet_id", "identitet_typ", "identitet_url", "identitet_sameas",
+            "personligt_koen", "personligt_helbred", "personligt_foedselsdato",
+            "personligt_nationalitet", "personligt_boligforhold",
+            "personligt_oekonomi", "personligt_hoejde", "personligt_alder",
+            "viden_kender_til", "viden_kompetencer", "viden_sprog",
+            "viden_interesser", "viden_brand", "viden_opfindelse",
+            "viden_sagstese", "viden_bevis", "viden_traumeTeknik",
+            # arbejde og registrering
+            "arbejde_erhverv", "arbejde_stilling", "arbejde_arbejdsgiver",
+            "arbejde_tilknytning", "arbejde_salgssteder", "arbejde_katalog",
+            "registrering_skat", "registrering_moms", "registrering_lokation",
+            # relation
+            "relation_børn", "relation_familie", "relation_kender",
+            "relation_forælder", "relation_kollega", "relation_venner",
+            "relation_ejer", "relation_opraader_i", "relation_livshaendelse",
+            "relation_aegtefaelle", "relation_soeskende",
+            # øvrige (dokumenter, sager, rapporter)
+            "indhold", "tekst", "besked", "resume", "dato", "år", "dag",
+            "sagsnr", "nr", "type", "rolle",
+            # direktioner — hvor man finder mere (DNA 2026-10-02: når en node
+            # først er fundet, skal den selv kunne pege videre, fx til
+            # Kanban-bordet og Ops' opgavelister)
+            "direktion_kanban", "direktion_kanban_arkiv", "direktion_kanban_færdige",
+            "direktion_kanban_igang", "direktion_kanban_detaljer",
+            "direktion_ops_færdige", "direktion_ops_igang",
+            "peger_på",
+        ]
+        vilkår = " OR ".join(f"v.{f} CONTAINS '{safe}'" for f in FELTER)
+        cur.execute(f"""
+            SELECT * FROM cypher('{GRAPH}',
+                $$
+                MATCH (v)
+                WHERE '{safe}' IN labels(v)
+                   OR {vilkår}
+                RETURN id(v) AS vid, labels(v) AS labs, properties(v) AS props
+                LIMIT 60
+                $$) AS (vid agtype, labs agtype, props agtype)
+        """)
+        nodes = [_parse_node(r[0], r[1], r[2]) for r in cur.fetchall()]
+        node_ids = {n["id"] for n in nodes}
+        if not node_ids:
+            return jsonify({"nodes": [], "edges": [], "match": False})
+        # Hent kanter mellem de fundne noder (uanset retning)
+        ids_csv = ",".join(node_ids)
+        cur.execute(f"""
+            SELECT * FROM cypher('{GRAPH}',
+                $$
+                MATCH (a)-[e]-(b)
+                WHERE toString(id(a)) IN [$ids] AND toString(id(b)) IN [$ids]
+                RETURN DISTINCT id(e) AS eid, id(a) AS aid, id(b) AS bid, type(e) AS t
+                LIMIT 400
+                $$) AS (eid agtype, aid agtype, bid agtype, t agtype)
+        """.replace("$ids", ids_csv))
+        edges = [_parse_edge(r) for r in cur.fetchall()]
+        return jsonify({"nodes": nodes, "edges": edges, "match": True,
+                        "nodeCount": len(nodes), "edgeCount": len(edges)})
+    finally:
+        c.close()
+
+
+@app.route("/api/neighbors")
+def api_neighbors():
+    """Hent en node + alle dens direkte naboer (via kanter, uanset retning)
+    med relationstype. Brugt af frontenden til at vise 'hvad hører sammen
+    med denne node' (fx en email → mailbox, dokumenter, personer)."""
+    nid = (__import__("flask").request.args.get("id") or "").strip()
+    if not nid:
+        return jsonify({"nodes": [], "edges": [], "match": False})
+    # nid kan komme som tal — rens til alfanumerisk
+    clean = "".join(ch for ch in nid if ch.isdigit())
+    if not clean:
+        return jsonify({"nodes": [], "edges": [], "match": False})
+    c = get_conn()
+    c.autocommit = True
+    cur = c.cursor()
+    cur.execute("SET search_path = ag_catalog, public")
+    try:
+        cur.execute(f"""
+            SELECT * FROM cypher('{GRAPH}',
+                $$
+                MATCH (v) WHERE toString(id(v)) = '{clean}'
+                RETURN id(v) AS vid, labels(v) AS labs, properties(v) AS props
+                LIMIT 1
+                $$) AS (vid agtype, labs agtype, props agtype)
+        """)
+        rows = cur.fetchall()
+        if not rows:
+            return jsonify({"nodes": [], "edges": [], "match": False})
+        nodes = [_parse_node(rows[0][0], rows[0][1], rows[0][2])]
+        nid0 = nodes[0]["id"]
+        # naboer via enhver kant (uanset retning), spring Periode->Periode over
+        cur.execute(f"""
+            SELECT * FROM cypher('{GRAPH}',
+                $$
+                MATCH (v)-[e]-(w)
+                WHERE toString(id(v)) = '{nid0}'
+                  AND NOT ('Periode' IN labels(v) AND 'Periode' IN labels(w))
+                RETURN id(e) AS eid, id(v) AS va, id(w) AS wb, type(e) AS t,
+                       id(w) AS wid, labels(w) AS wl, properties(w) AS wp
+                LIMIT 200
+                $$) AS (eid agtype, va agtype, wb agtype, t agtype, wid agtype, wl agtype, wp agtype)
+        """)
+        edges = []
+        seen = {nid0}
+        for row in cur.fetchall():
+            eid, va, wb, t, wid, wl, wp = str(row[0]), str(row[1]), str(row[2]), row[3], str(row[4]), row[5], row[6]
+            try:
+                elabel = json.loads(t) if t else ""
+            except Exception:
+                elabel = ""
+            if wid not in seen:
+                seen.add(wid)
+                nodes.append(_parse_node(wid, wl, wp))
+            # edge fra center-noden mod nabo (normaliser retning)
+            edges.append({"id": eid, "from": va, "to": wb, "label": elabel or ""})
+        return jsonify({"nodes": nodes, "edges": edges, "match": True,
+                        "nodeCount": len(nodes), "edgeCount": len(edges)})
+    finally:
+        c.close()
+
+
+@app.route("/api/graph")
+def api_graph():
+    c = get_conn()
+    c.autocommit = True
+    cur = c.cursor()
+    cur.execute("SET search_path = ag_catalog, public")
+    try:
+        # Noder: id, labels, properties — alt inde i cypher (verificeret syntaks)
+        cur.execute(f"""
+            SELECT * FROM cypher('{GRAPH}', $$
+                MATCH (v) RETURN id(v) AS vid, labels(v) AS labs, properties(v) AS props
+            $$) AS (vid agtype, labs agtype, props agtype)
+            LIMIT {MAX_NODES}
+        """)
+        nodes = []
+        for row in cur.fetchall():
+            vid, labs, props = str(row[0]), row[1], row[2]
+            label = ""
+            try:
+                larr = json.loads(labs) if labs else []
+                label = larr[0] if larr else ""
+            except Exception:
+                label = ""
+            if _skal_skjules(label):
+                continue
+            props_dict = {}
+            try:
+                props_dict = json.loads(props) if props else {}
+            except Exception:
+                props_dict = {}
+            display = _first_text(props_dict, ("navn", "name", "title", "emne", "label")) or label or "?"
+            group, age = _group_age(props_dict, label)
+            nodes.append({
+                "id": vid,
+                "label": str(display)[:50],
+                "group": group,
+                "age": age,
+                "role": props_dict.get("rolle") or "",
+                "props": props_dict,
+            })
+
+        # Kanter: id, start, end, type — inde i cypher (verificeret).
+        # Spring de interne Periode->Periode-kanter over (48.533 stk. tungt tids-skelet
+        # der får browseren til at crashe ved 40.000+ kanter). Kun kanter der
+        # IKKE er Periode->Periode medtages, og kun dem med begge ender blandt de viste noder.
+        cur.execute(f"""
+            SELECT * FROM cypher('{GRAPH}', $$
+                MATCH (a)-[e]->(b)
+                WHERE NOT ('Periode' IN labels(a) AND 'Periode' IN labels(b))
+                RETURN id(e) AS eid, id(a) AS aid, id(b) AS bid, type(e) AS t
+            $$) AS (eid agtype, aid agtype, bid agtype, t agtype)
+            LIMIT {MAX_EDGES}
+        """)
+        edges = []
+        node_ids = {n["id"] for n in nodes}
+        for row in cur.fetchall():
+            eid, aid, bid, t = str(row[0]), str(row[1]), str(row[2]), row[3]
+            if aid not in node_ids or bid not in node_ids:
+                continue  # spring kant over hvis enden ikke er blandt de viste noder
+            try:
+                elabel = json.loads(t) if t else ""
+            except Exception:
+                elabel = ""
+            edges.append({"id": eid, "from": aid, "to": bid, "label": elabel or ""})
+
+        return jsonify({
+            "nodes": nodes,
+            "edges": edges,
+            "graph": GRAPH,
+            "nodeCount": len(nodes),
+            "edgeCount": len(edges),
+        })
+    finally:
+        c.close()
+
+
+@app.route("/api/moc_vektorer")
+def api_moc_vektorer():
+    """Vektorer knyttet til en MOC-node (DNA 2026-10-03).
+
+    Slår op i ag_catalog.referencer_embeddings på nodens NAVN — den bærer
+    sammenkædningen mellem grafen (boblen) og vektoren (indekset over Ops).
+    Returnerer hver vektors navn, hvilken slags den er, hvilken anden boble
+    den hører til, stien til den mappe/note den peger på, og et uddrag.
+
+    Læser KUN. Skriver intet.
+    """
+    navn = (__import__("flask").request.args.get("navn") or "").strip()
+    if not navn:
+        return jsonify({"vektorer": [], "antal": 0, "navn": ""})
+    c = get_conn()
+    c.autocommit = True
+    cur = c.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT navn,
+                   COALESCE(metadata->>'type', ''),
+                   COALESCE(metadata->>'boble', ''),
+                   COALESCE(metadata->>'domene', ''),
+                   COALESCE(metadata->>'sti', ''),
+                   LEFT(tekst, 900)
+            FROM ag_catalog.referencer_embeddings
+            WHERE navn = %s
+            ORDER BY (metadata->>'type') = 'agent-boble' DESC, navn
+            """,
+            (navn,),
+        )
+        vektorer = []
+        for r in cur.fetchall():
+            sti = r[4] or ''
+            tekst = (r[5] or '').strip()
+            mappe = sti
+            # agent-bobler har ingen sti i metadata — men bærer linjen
+            # "WORKSPACE: ..." og "INFORMATIONS-CENTER: ...". Læs dem ud, så
+            # fanen kan vise hvilken mappe i Ops boblen hænger sammen med.
+            workspace = ''
+            ic = ''
+            # Felterne kan stå på hver sin linje ELLER inde i én samlet linje —
+            # find dem uanset, og stop ved næste markør/skilletegn.
+            import re as _re
+            for mønster, nøgle in ((r"WORKSPACE:\s*(.+?)(?=\s{2,}[A-ZÆØÅ-]{4,}:|$)", "workspace"),
+                                     (r"INFORMATIONS-CENTER:\s*(.+?)(?=\s{2,}[A-ZÆØÅ-]{4,}:|$)", "ic")):
+                m = _re.search(mønster, tekst)
+                if m:
+                    v = m.group(1).strip().rstrip('.')
+                    if nøgle == "workspace":
+                        workspace = v
+                    else:
+                        ic = v
+            if ic and "—" in ic:
+                ic = ic.split("—")[0].strip()
+            if not mappe:
+                if ic:
+                    mappe = ic.split('—')[0].strip()
+                elif sti.lower().endswith('.md'):
+                    mappe = sti.rsplit("/", 1)[0] if "/" in sti else sti
+            vektorer.append({
+                "navn": r[0] or "",
+                "type": r[1] or "",
+                "boble": r[2] or "",
+                "domene": r[3] or "",
+                "sti": sti,
+                "mappe": mappe,
+                "workspace": workspace,
+                "informationscenter": ic,
+                "uddrag": tekst,
+            })
+        return jsonify({"navn": navn, "antal": len(vektorer), "vektorer": vektorer})
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"navn": navn, "antal": 0, "vektorer": [], "fejl": str(e)[:200]})
+    finally:
+        c.close()
+
+
+# ---------------------------------------------------------------
+# Faste datasæt ud over AGE-hovedgrafen. Læses fra backend/data/.
+# "efterforskning" = børnesagens netværk bygget i Flowsint (OSINT).
+# ---------------------------------------------------------------
+DATA_DIR = os.path.join(BASE_DIR, "data")
+
+
+@app.route("/api/efterforskning")
+def api_efterforskning():
+    """EFTERFORSKNINGERNE — læses fra Flowsint (Neo4j), ikke den gamle graf.
+
+    DNA 2026-10-16: Efterforskningsknappen skal pege på Flowsints Neo4j-database,
+    hvor agenternes efterforskninger ligger. Hver efterforskning er et "sketch"
+    (en graf); listen hentes fra /api/efterforskninger og grafen herfra via
+    ?sketch_id=....
+
+    Læses over Flowsint API'et (samme netværk), som selv læser Neo4j.
+    """
+    sketch_id = (__import__("flask").request.args.get("sketch_id") or "").strip()
+    if not sketch_id:
+        return jsonify({"nodes": [], "edges": [], "graph": "efterforskning",
+                        "nodeCount": 0, "edgeCount": 0,
+                        "fejl": "mangler sketch_id"}), 400
+    try:
+        data = _flowsint(f"/api/sketches/{sketch_id}/graph", {"format": "json"})
+    except Exception as fejl:  # noqa: BLE001
+        return jsonify({"nodes": [], "edges": [], "graph": "efterforskning",
+                        "nodeCount": 0, "edgeCount": 0,
+                        "fejl": f"kunne ikke nå Flowsint: {fejl}"}), 503
+    nodes = []
+    for nd in (data.get("nds") or []):
+        props = nd.get("nodeProperties") or {}
+        nodes.append({
+            "id": str(nd.get("id") or ""),
+            "label": str(nd.get("nodeLabel") or "?")[:50],
+            "group": nd.get("nodeType") or "?",
+            "age": nd.get("nodeType") or "?",
+            "role": "",
+            "props": props,
+        })
+    edges = []
+    node_ids = {n["id"] for n in nodes}
+    for rl in (data.get("rls") or []):
+        src, tgt = str(rl.get("source") or ""), str(rl.get("target") or "")
+        if src not in node_ids or tgt not in node_ids:
+            continue
+        edges.append({"id": str(rl.get("id") or ""), "from": src, "to": tgt,
+                      "label": rl.get("label") or ""})
+    return jsonify({
+        "nodes": nodes, "edges": edges, "graph": "efterforskning",
+        "nodeCount": len(nodes), "edgeCount": len(edges),
+    })
+
+
+@app.route("/api/efterforskninger")
+def api_efterforskninger():
+    """Liste over efterforskninger fra Flowsint — til rullemenuen i topbaren.
+
+    Returnerer [{id, navn, sketches:[{id, title}]}] så knappen kan fyldes
+    dynamisk. Når agenter laver nye efterforskninger i Flowsint, dukker de op
+    her af sig selv.
+    """
+    try:
+        inv = _flowsint("/api/investigations", {})
+    except Exception as fejl:  # noqa: BLE001
+        return jsonify({"efterforskninger": [], "fejl": str(fejl)}), 503
+    ud = []
+    for it in (inv or []):
+        ud.append({
+            "id": it.get("id"),
+            "navn": it.get("name") or "",
+            "sketches": [{"id": s.get("id"), "title": s.get("title") or ""}
+                         for s in (it.get("sketches") or [])],
+        })
+    return jsonify({"efterforskninger": ud})
+
+
+def _flowsint(sti: str, params: dict):
+    """Kald Flowsint API'et (samme netværk) med service-token. Read-only."""
+    import urllib.parse
+    import urllib.request
+    url = os.environ.get("FLOWSINT_API", "http://Helix_Flowsint_API:5001") + sti
+    if params:
+        url += "?" + urllib.parse.urlencode(params)
+    token = os.environ.get("FLOWSINT_TOKEN", "").strip()
+    if not token:
+        # Fald tilbage til token-filen (sat via docker, overlever su-proces-renset miljø).
+        try:
+            with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                   "flowsint_token"), encoding="utf-8") as fh:
+                token = fh.read().strip()
+        except Exception:  # noqa: BLE001
+            token = ""
+    req = urllib.request.Request(url)
+    if token:
+        req.add_header("Authorization", "Bearer " + token)
+    with urllib.request.urlopen(req, timeout=15) as svar:
+        return json.loads(svar.read().decode("utf-8"))
+
+
+@app.route("/api/ops")
+def api_ops():
+    """Fast datasæt: NOTERNE — notemappen som struktureret kort.
+
+    Bygget af backend/byg_ops.py: noter = noder, topmapper = domæner,
+    undermapper = labels, [[wikilinks]] + mappetilhør = kanter.
+    Læses KUN fra filen — rører hverken Obsidian eller grafen.
+    """
+    path = os.path.join(DATA_DIR, "ops.json")
+    if not os.path.exists(path):
+        return jsonify({"error": "datasæt ikke fundet"}), 404
+    with open(path, encoding="utf-8") as f:
+        return jsonify(json.load(f))
+
+
+@app.route("/api/ops_note")
+def api_ops_note():
+    """Læser ÉN note fra Obsidian-vaulten (kun læsning, kun .md i vaulten).
+
+    Bruges når DNA klikker en boble i OPS-visningen og vil læse noten.
+    """
+    from flask import request
+    sti = (request.args.get("sti") or "").strip()
+    if not sti or ".." in sti or sti.startswith("__mappe__"):
+        return jsonify({"error": "ugyldig sti"}), 400
+    rod = os.environ.get("OBSIDIAN_VAULT", "/vault")
+    fuld = os.path.normpath(os.path.join(rod, sti))
+    if not fuld.startswith(os.path.normpath(rod)):
+        return jsonify({"error": "uden for vaulten"}), 400
+    if not fuld.lower().endswith(".md") or not os.path.isfile(fuld):
+        return jsonify({"error": "noten findes ikke"}), 404
+    with open(fuld, encoding="utf-8", errors="replace") as f:
+        return jsonify({"sti": sti, "indhold": f.read()})
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=8000)

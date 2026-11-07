@@ -1,0 +1,465 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""Laeseren — spaCy paa dansk, inde i selve Konklusionsmotoren.
+
+HVORFOR HER OG IKKE I BROEN (DNA 2. nov 2026): det er motoren der laeser
+saetningen og laver fejlen. Broen faar en daarlig vare at binde. Derfor
+rettes det her, hvor fejlen opstaar.
+
+REGEL: denne fil maa ALDRIG kunne vaelte motoren. Er spaCy ikke installeret,
+eller fejler den paa en saetning, siger vi det hoest og falder tilbage til
+de gamle moenstre. En hjerne der ikke kan laese er vaerre end en hjerne der
+laeser mindre.
+
+Det den kan, maalt paa 300 register-tekster 2. nov 2026: 73 % af de
+ikke-stoej tekster gav mindst ét brugbart faktum (141 af 192).
+
+Det den IKKE kan alene, og som derfor er filtreret her:
+  * Spoergsmaal og samtale-mekanik er ikke fakta.
+  * Grundleddet skal vaere en person, en organisation eller en ting — ikke
+    en dato, et pronomen eller en biseatning. Uden det filter gav spaCy
+    "2026-10-11 undersoegte DNA" med datoen som grundled.
+"""
+
+from __future__ import annotations
+
+import re
+
+_nlp = None
+_forsoegt = False
+
+# Ord der aldrig kan vaere et grundled: pronominer og fyld.
+TOM = {
+    "som", "der", "det", "den", "de", "han", "hun", "vi", "jeg", "du", "man",
+    "så", "her", "nu", "hvad", "hvem", "hvor", "hvordan", "hvornår", "dette",
+    "disse", "noget", "nogen", "alt", "alle", "ingen", "intet",
+}
+
+SPOERGSMAAL = re.compile(r"\?\s*$")
+# Systemsnak er ikke altid skrald (DNA 3. nov 2026). Et dagsbrev, en opgaveliste
+# eller en fejlbesked er MASKINE der taler — ikke Danny. Men en sætning om at
+# "motoren kører på port 6305" ER en kendsgerning. Derfor skelnes der:
+#   MASKINE_START = teksten BEGYNDER som en maskinbesked -> skrald
+#   MASKINE_ORD   = spredte systemord -> ikke nok alene, læseren afgør resten
+MASKINE_START = re.compile(
+    r"^\s*(\[[a-zæøå ]+\]|dagsbrev|åbne opgaver|opgaver klar|"
+    r"(cron|failure|traceback)[: _]|\[cron|\[system|\[note|\[helix|"
+    r"error[: ]|warning[: ]|\$ |python3 |docker |system:)",
+    re.I,
+)
+# Hele beskeden er en opgaveliste/fejlrapport — så er der intet faktum i den.
+MASKINE_HEL = re.compile(
+    r"(åbne opgaver|ingen aftaler i morgen|opgaver klar|"
+    r"\d+ ready, \d+ i gang|kalenderen er tom|crash-loop)",
+    re.I,
+)
+# META er MINE egne forklaringer, ikke viden om DNA (målt 3. nov 2026).
+# Halvdelen af konklusionerne blev "Sletningen vente på godkendelse" og
+# "Inden for mit kontekstvindue kan jeg se mine egne fejl" — altså mig der
+# forklarer mig, læst som om det var kendsgerninger om ham.
+META = re.compile(
+    r"\b(jeg|mig|min|mit|mine)\b.*\b(forklarer|tjekker|sletter|bygger|retter|"
+    r"prøver|kigger|finder|skal|kan|ved|tror|mener)\b|"
+    r"(godkendelse|kontekstvindue|konklusion(er)?|filter(et)?|provider|"
+    r"parameter|indekser|kommando|terminal|filen|koden)\b",
+    re.I,
+)
+# Ord der aldrig er et rigtigt emne alene.
+TOM_EMNE = {
+    "i stedet", "nej", "ja", "brug", "mange udvidelser", "] udvidelser",
+    "en som boks", "backup", "sletningen", "hud'en", "udvidelser",
+}
+FILTER_STOEJ = re.compile(
+    r"nikolaj\s+wint|nicolai\s+wint|wint(er|her)\b|"
+    r"undertekst|tekstet af|dansk tekst|"
+    r"abonner p|kanal(er)?\b",
+    re.I,
+)
+# Islandsk volapyk er altid fejlhoert stoej i en dansk samtale.
+ISLANDSK = re.compile(
+    r"\b(þ|ð|ætla|hvað|það|ekki|við|eru|þér|þú|hann|hún|af\s+þv|"
+    r"þessu|þeir|þær|ekkert|sagði|kemur|komið)\b",
+    re.I,
+)
+MEKANIK = re.compile(
+    r"^(hej|hejsa|tak|ok|okay|ja|nej|godmorgen|godaften|nå|jamen|altså|"
+    r"kan du|vil du|skal vi|hvad|hvordan|hvor|hvornår|hvem|er det|har du)\b",
+    re.I,
+)
+# Et grundled der er en dato, et tal eller et tidspunkt er ikke et emne.
+ER_DATO = re.compile(
+    r"^\d{1,4}[./-]\d{1,2}([./-]\d{1,4})?$|^\d{4}$|^kl\.?\s*\d|^\d{1,2}[.:]\d{2}$"
+)
+
+# Verber der baerer en relation mellem to parter (DNA's eksempel:
+# "Soeren har snakket med Peter" -> en kant, ikke en saetning).
+RELATIONSVERB = {
+    "snakke", "tale", "møde", "mødes", "ringe", "skrive", "sende", "give",
+    "tage", "købe", "sælge", "betale", "ansætte", "fyre", "besøge", "hjælpe",
+    "fortælle", "spørge", "svare", "aftale", "bestille", "levere", "modtage",
+    "kende", "samarbejde", "korrespondere", "arbejde", "bo", "flytte", "rejse",
+    "beslutte", "godkende", "afvise", "anmelde", "klage", "vidne", "undersøge",
+    "vurdere", "instruere", "bistå", "repræsentere",
+}
+
+
+def _model():
+    """Indlaes den danske model én gang. Fejler den, siger vi det og gaar videre."""
+    global _nlp, _forsoegt
+    if _forsoegt:
+        return _nlp
+    _forsoegt = True
+    try:
+        import spacy  # noqa: F401
+
+        for navn in ("da_core_news_lg", "da_core_news_md", "da_core_news_sm"):
+            try:
+                _nlp = spacy.load(navn)
+                break
+            except Exception:
+                continue
+    except Exception as e:  # spaCy mangler helt
+        print(f"[laeser] spaCy utilgaengelig: {e} — bruger de gamle moenstre",
+              flush=True)
+        _nlp = None
+    return _nlp
+
+
+def er_samtalestoej(tekst: str) -> bool:
+    """Spoergsmaal, hoeflighed og stemmens eget filt-nonsens baerer ikke et faktum.
+
+    DNA 3. nov 2026: Whisper samler stoej op som ord — stemmens eget navn
+    ("Nikolaj Winter"), filtertekster og islandsk volapyk. Det er IKKE viden om
+    ham, og det maa aldrig blive en konklusion.
+    """
+    t = (tekst or "").strip()
+    if SPOERGSMAAL.search(t) or MEKANIK.match(t):
+        return True
+    if FILTER_STOEJ.search(t):
+        return True
+    # Maskinbeskeder: dagsbreve, opgavelister, fejlrapporter, cron.
+    if MASKINE_START.search(t) or MASKINE_HEL.search(t):
+        return True
+    # Meta: mine egne forklaringer, ikke viden om DNA.
+    if META.search(t):
+        return True
+    # Islandsk i en dansk samtale er altid fejlhoert stoej (DNA's egen regel).
+    if ISLANDSK.search(t):
+        return True
+    return False
+
+
+def _navn(tok) -> str:
+    """Hele navnefrasen, ikke bare ordet.
+
+    DNA 3. nov 2026: sammensatte navne blev klippet ("Advokaten Jeanette
+    Gjørret" -> "Advokaten Jeanette"). Reglen er: et egennavn følger med
+    sine nabo-egennavne, og en foranstillet titel ("Advokaten") hører med.
+    """
+    sent = tok.sent
+    if tok.ent_type_:
+        for e in sent.ents:
+            if tok.i >= e.start and tok.i < e.end:
+                return e.text.strip()
+
+    dele = [tok.text]
+    # Egennavne til højre for ordet hører til samme navn — også tal, så
+    # "Opel Astra 1,4" ikke mister modelbetegnelsen.
+    if tok.pos_ == "PROPN" or tok.ent_type_:
+        for b in tok.rights:
+            if b.pos_ in ("PROPN", "NUM") or b.ent_type_ or b.dep_ == "flat":
+                dele.append(b.text)
+            elif b.dep_ in ("flat", "appos") and b.pos_ in ("NOUN", "PROPN"):
+                dele.append(b.text)
+    else:
+        for b in tok.rights:
+            if b.dep_ in ("nmod", "flat", "appos") and b.pos_ in ("NOUN", "PROPN"):
+                dele.append(b.text)
+                break
+
+    # Titler og kendeord til venstre.
+    for b in tok.lefts:
+        if b.dep_ in ("det", "amod", "poss", "case"):
+            dele.insert(0, b.text)
+        elif b.pos_ == "NOUN" and tok.pos_ == "PROPN":
+            dele.insert(0, b.text)
+
+    return " ".join(dele).strip()
+
+
+def _loes_pronomen(tok, doc):
+    """Bind et pronomen til det det peger paa (DNA 3. nov 2026).
+
+    Maalt: 39 % af konklusionerne havde et pronomen som emne ("Nu", "Dem",
+    "Efter du"). Pronomen-binding er det der goer dem til noget der kan laeses.
+
+    Reglen er spaCys egen: et pronomen peger paa det naermeste navneord FØR
+    det i samme saetning eller i den foregaaende — helst et egennavn. Kan vi
+    ikke finde et, giver vi op (returnerer None); vi gaetter ikke.
+    """
+    if tok.pos_ != "PRON" and (tok.text or "").lower() not in TOM:
+        return None
+
+    def er_navn(t):
+        return t.pos_ == "PROPN" or t.ent_type_ in ("PER", "ORG", "LOC")
+
+    # 1) Samme saetning, foer pronomenet: helst et egennavn, ellers et navneord.
+    for t in reversed([x for x in tok.sent if x.i < tok.i]):
+        if er_navn(t):
+            return _navn(t)
+    for t in reversed([x for x in tok.sent if x.i < tok.i]):
+        if t.pos_ == "NOUN" and t.text.lower() not in TOM:
+            return _navn(t)
+
+    # 2) Foregaaende saetninger, nyeste foerst. Tag GRUNDLEDDET — ikke det
+    #    sidste navn. Maalt: "Soeren snakkede med Peter. Han sagde..." bandt
+    #    "Han" til Peter fordi han stod sidst. Det er forkert; pronomenet peger
+    #    paa den der HANDLEDE i den foregaaende saetning.
+    saetninger = list(doc.sents)
+    try:
+        idx = saetninger.index(tok.sent)
+    except ValueError:
+        return None
+    for sent in reversed(saetninger[:idx]):
+        for t in sent:
+            if t.dep_ in ("nsubj", "nsubj:pass") and er_navn(t):
+                return _navn(t)
+    for sent in reversed(saetninger[:idx]):
+        for t in sent:
+            if t.dep_ in ("nsubj", "nsubj:pass") and t.pos_ == "NOUN":
+                return _navn(t)
+    return None
+
+
+def _brugbart(navn: str, tok=None) -> bool:
+    """Kan dette vaere et emne eller en genstand? Dato, tal og pronomen: nej."""
+    n = (navn or "").strip()
+    if not n or len(n) < 2:
+        return False
+    if n.lower() in TOM:
+        return False
+    if ER_DATO.match(n):
+        return False
+    if tok is not None and tok.pos_ in ("NUM", "DET", "PRON", "ADP", "CCONJ"):
+        return False
+    # Et enkelt lille ord er ikke et emne.
+    if len(n) <= 2:
+        return False
+    return True
+
+
+def find_taler(tekst: str) -> str | None:
+    """Hvem siger dette? Læs stemmegenkendelsens mærke, gæt ikke.
+
+    DNA 3. nov 2026: beskeden kommer med et mærke i begyndelsen —
+    '[taler: Danny (0.87, telefon)]' eller '[taler: ukendt]'. Det er den
+    VEJVISER der afgør hvad "jeg" peger på. Uden mærket (skrevet besked)
+    er det DNA selv, fordi det er hans samtale.
+    """
+    m = re.search(r"\[taler:\s*([^\]\(,]+)", tekst or "", re.I)
+    if not m:
+        return "Danny"      # ingen stemme i beskeden = skrevet af DNA
+    navn = m.group(1).strip()
+    if not navn or navn.lower() in ("ukendt", "unknown", "arvet"):
+        return None         # vi ved ikke hvem — gæt ikke
+    return navn
+
+
+def laes(tekst: str, taler: str | None = None) -> list[dict]:
+    """Laes en tekst og returnér de faktiske relationer i den.
+
+    Hvert faktum er {emne, egenskab, vaerdi, form, relationel, sats}.
+    Tom liste = laeseren fandt intet den ville staa inde for. Saa overtager
+    motorens egne moenstre som foer.
+
+    'taler' er navnet paa den der ejer samtalen. Er det ikke givet, læses det
+    af beskedens eget maerke (se find_taler). "Jeg" peger paa DEN DER TALER —
+    er taleren ukendt, bliver saetningen ikke til en konklusion, for saa
+    ville vi gaette.
+    """
+    if er_samtalestoej(tekst):
+        return []
+    nlp = _model()
+    if nlp is None:
+        return []
+    if taler is None:
+        taler = find_taler(tekst)
+    # Ukendt taler: vi kan ikke afgøre hvad "jeg" peger på, så vi gætter ikke.
+    if taler is None:
+        return []
+    try:
+        doc = nlp((tekst or "")[:1500])
+    except Exception as e:
+        print(f"[laeser] spaCy fejlede: {e} — gamle moenstre tager over", flush=True)
+        return []
+
+    facts = []
+    for sent in doc.sents:
+        subjekter = [t for t in sent if t.dep_ in ("nsubj", "nsubj:pass")]
+        # spaCys danske model saetter "møde" i "til møde" som obl, ikke obj.
+        # Behandl derfor obl som genstand NAAR den baerer et navneord der ikke
+        # er tid eller maengde — ellers taber vi "Danny skal til møde".
+        objekter = [t for t in sent if t.dep_ in ("dobj", "obj", "iobj")]
+        for t in sent:
+            if (t.dep_ == "obl" and t.pos_ in ("NOUN", "PROPN")
+                    and t.ent_type_ not in ("DATE", "TIME", "DURATION", "QUANTITY")
+                    and t.text.lower() not in ("sekund", "minut", "time", "gang", "dag")):
+                objekter.append(t)
+        verber = [t for t in sent if t.pos_ in ("VERB", "AUX") and t.dep_ == "ROOT"]
+        # "Danny skal til møde" har "skal" som ROOT — et hjælpeverbum. Så
+        # findes der intet hovedverbum at hænge kendsgerningen på, og sætningen
+        # faldt ud (målt 3. nov 2026). Tag i stedet det første VERB i sætningen,
+        # og fald tilbage til ROOT hvis der slet ikke er noget.
+        if not verber:
+            hoved = [t for t in sent if t.pos_ == "VERB"]
+            # Er der slet intet VERB ("Danny skal til møde" har kun AUX), så
+            # brug ROOT alligevel — ellers falder hele sætningen ud.
+            verber = hoved or [t for t in sent if t.dep_ == "ROOT" and t.pos_ in ("VERB", "AUX")]
+        # Intet markerede grundled (fx "Holmegårdshuset modtog 187.000"):
+        # tag det foerste egennavn/navneord FOER verbet. Ellers faldt
+        # saetningen helt ud (maalt 3. nov 2026, 1 af 25).
+        if not subjekter and verber:
+            for t in sent:
+                # spaCy kan tage et ukendt egennavn for et adverbium
+                # ("Holmegårdshuset" blev ADV). Tag derfor det foerste ord foer
+                # verbet der ikke er et funktionsord.
+                if (t.i < verber[0].i
+                        and t.pos_ not in ("ADP", "DET", "CCONJ", "SCONJ",
+                                           "PUNCT", "AUX", "PART")
+                        and len(t.text) > 2):
+                    subjekter = [t]
+                    break
+        if not subjekter or not verber:
+            continue
+        verb = verber[0]
+        lemma = (verb.lemma_ or verb.text).lower()
+
+        for s in subjekter:
+            # Pronomen-binding (DNA 3. nov 2026): er emnet et pronomen eller
+            # fyld ("Dem", "Nu", "Efter du"), bind det til det nærmeste navn
+            # FØR det. Kan vi ikke, springer vi sætningen over — hellere ingen
+            # konklusion end en der ikke kan læses.
+            # FØRSTEPERSON (DNA 3. nov 2026): "jeg"/"mig"/"min" er den der
+            # taler. Tjekkes FØR _navn, fordi "Jeg" med stort begyndelses-
+            # bogstav ellers ser ud som et navn og går videre som et emne.
+            if (s.text or "").lower() in ("jeg", "mig", "min", "mit", "mine"):
+                emne = taler
+            else:
+                emne = _navn(s)
+            if not _brugbart(emne, s) and emne != taler:
+                emne = _loes_pronomen(s, doc)
+                if not emne or not _brugbart(emne):
+                    continue
+
+            # TAL ER FACITPUNKTER (DNA 3. nov 2026). "Kommunen betalte 187.000
+            # kroner" tabte beløbet, og "27 møder uden referat" tabte tallet —
+            # det er netop detaljen der gør konklusionen værd at have i en sag.
+            haeng_paa = []
+            for t in sent:
+                # "en"/"et" er kendeord, ikke tal — de blev fanget af like_num
+                # og gav halen "(en 1,4 fire)". Kun ægte tal hører til værdien.
+                if (t.pos_ == "NUM" or t.like_num) and t.text.lower() not in (
+                        "en", "et", "den", "det", "de", "én", "eet"):
+                    enhed = None
+                    for b in t.rights:
+                        if b.pos_ == "NOUN":
+                            enhed = b.text
+                            break
+                    # Skriv ALDRIG "None" ind i en konklusion (målt 3. nov 2026).
+                    haeng_paa.append(f"{t.text} {enhed}" if enhed else t.text)
+            # TID OG STED hører til kendsgerningen (DNA 3. nov 2026).
+            # "Danny skal til møde på tirsdag klokken 17" tabte tidspunktet.
+            for t in sent:
+                if t.dep_ in ("nmod", "obl") and t.ent_type_ in ("DATE", "TIME", "LOC"):
+                    haeng_paa.append(t.text)
+            # Bisætning med egennavn: "en søn som hedder Dio" -> "Dio".
+            # Egennavne i biseatninger hoerer IKKE i parentesen — de gav
+            # "Benny Emmery undersøge Danny (2020 Emmery)". Kun tal og tid
+            # hoerer der. Navnet bliver sin egen konklusion via pronomen-binding.
+
+            if objekter:
+                for o in objekter:
+                    vaerdi = _navn(o)
+                    if not _brugbart(vaerdi, o):
+                        # Kun pronominer der PEER paa noget bliver bundet.
+                        # "det"/"der" som genstand i "han sagde det" peger ikke
+                        # paa en part — det er en tom plads. Maalt: det gav
+                        # "Soeren sige Soeren", som er forkert.
+                        if (o.text or "").lower() in ("det", "der", "dette", "disse"):
+                            continue
+                        vaerdi = _loes_pronomen(o, doc)
+                        if not vaerdi or not _brugbart(vaerdi):
+                            continue
+                    # Adverbialer der er ren maengde/tid er ikke en genstand
+                    # ("hvert sekund" gav "sekund | lukke | sekund"). Men "møde"
+                    # er ogsaa obl i dansk og SKAL med — derfor afgoeres det
+                    # paa ordet, ikke paa klassen (rettet 3. nov 2026).
+                    if (o.dep_ == "obl" and o.text.lower() in
+                            ("sekund", "minut", "time", "gang", "dag", "uge",
+                             "maaned", "aar", "gangen")):
+                        continue
+                    # Hæng kun tid og tal på som en parentes, når de ikke står
+                    # i værdien i forvejen, og rens for gentagelser og tomme
+                    # led ("Opel Astra (en Astra)" kom af at "Astra" allerede
+                    # stod i værdien, mens "1,4" blev klippet af flat-reglen).
+                    if haeng_paa:
+                        rene = []
+                        for x in haeng_paa:
+                            x = (x or "").strip()
+                            if not x:
+                                continue
+                            # Kendeord hoerer ikke til en vaerdi: "Opel Astra
+                            # (en 1,4 fire)" gav ingen mening.
+                            x = re.sub(r"^(en|et|den|det|de)\s+", "", x, flags=re.I)
+                            if not x or x.lower() in vaerdi.lower():
+                                continue
+                            if x not in rene:
+                                rene.append(x)
+                        if rene:
+                            vaerdi = f"{vaerdi} ({' '.join(rene)})"
+                    facts.append({
+                        "emne": emne,
+                        "egenskab": lemma,
+                        "vaerdi": vaerdi,
+                        "form": "relation" if lemma in RELATIONSVERB else "findes",
+                        "relationel": lemma in RELATIONSVERB,
+                        "sats": sent.text.strip()[:300],
+                    })
+                    break
+            else:
+                facts.append({
+                    "emne": emne, "egenskab": lemma, "vaerdi": None,
+                    "form": "haendte", "relationel": False,
+                    "sats": sent.text.strip()[:300],
+                })
+    return facts
+
+
+# ---------------------------------------------------------------- selvtest
+def _selvtest():
+    """Den mindste proeve der fejler hvis laeseren holder op med at virke."""
+    if _model() is None:
+        print("laeser: spaCy ikke installeret — selvtest springes over")
+        return
+
+    f = laes("Søren har snakket med Peter om mødet på mandag klokken 14.")
+    assert f, "fandt intet faktum i DNA's eget eksempel"
+    par = [(x["emne"], x["vaerdi"]) for x in f]
+    assert any("Søren" in a and b and "Peter" in b for a, b in par), \
+        f"Soeren-Peter-relationen mangler: {f}"
+    assert any(x["relationel"] for x in f), "snakke skulle give en relation"
+
+    # En dato maa aldrig blive grundled.
+    g = laes("2026-10-11 undersøgte DNA Tiiny AI Pocket Lab.")
+    assert not any(x["emne"].startswith("2026") for x in g), \
+        f"dato blev grundled: {g}"
+
+    # Spoergsmaal er ikke fakta.
+    assert laes("Kan du ikke lige prøve at finde ud af det?") == [], \
+        "spoergsmaal blev laest som faktum"
+
+    print("laeser: selvtest OK")
+
+
+if __name__ == "__main__":
+    _selvtest()

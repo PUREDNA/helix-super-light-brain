@@ -1,0 +1,2090 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Helix Super Brain</title>
+<style>
+  :root { --bg:#0f172a; --panel:#1e293b; --accent:#38bdf8; --text:#e2e8f0; --muted:#94a3b8; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; font-family:'Segoe UI',system-ui,sans-serif; background:var(--bg); color:var(--text); }
+  #wrap { position:relative; height:100vh; display:flex; flex-direction:column; overflow:hidden; }
+  #topbar { flex:0 0 auto; display:flex; align-items:center; gap:10px; padding:4px 12px; background:var(--panel); border-bottom:1px solid #334155; font-size:12px; color:var(--muted); z-index:30; flex-wrap:nowrap; overflow:visible; }
+  #topbar .ttl { color:var(--accent); font-weight:600; font-size:13px; }
+  #topbar #status { display:none; }
+  #topbar .statsep { white-space:nowrap; }
+  #topbar .grow { flex:1; }
+  #topbar .grp { display:flex; gap:4px; white-space:nowrap; flex-shrink:0; }
+  /* Brand-blok: titel + lysdiode, med noder/kanter i en lille linje under */
+  .brand { display:flex; flex-direction:column; align-items:flex-start; gap:1px; line-height:1.15; white-space:nowrap; flex-shrink:0; }
+  .brand-top { display:flex; align-items:center; gap:7px; }
+  .brand-sub { font-size:10px; color:var(--muted); }
+  .brand-sub b { color:var(--text); font-weight:600; }
+  .led { width:9px; height:9px; border-radius:50%; display:inline-block; flex:0 0 auto; }
+  .led.gul { background:#facc15; animation:ledblink 1s infinite; }
+  .led.groen { background:#22c55e; }
+  .led.roed { background:#ef4444; }
+  @keyframes ledblink { 50% { opacity:.25; } }
+  .ds-btn { background:#334155; color:var(--text); border:1px solid #475569; border-radius:8px; padding:5px 12px; font-size:12px; cursor:pointer; }
+  .ds-btn:hover { filter:brightness(1.25); }
+  .ds-btn.active { background:var(--accent); color:#06283d; border-color:var(--accent); font-weight:600; }
+  /* Dropdown-gruppe i topbaren : Hjerne og Efterforskning
+     folder sig ud og lader DNA vælge kilde hhv. undersøgelse. */
+  .ds-drop { position:relative; display:inline-block; }
+  .ds-menu { display:none; position:absolute; top:calc(100% + 4px); right:0; z-index:60;
+             background:#1e293b; border:1px solid #475569; border-radius:8px; min-width:190px;
+             box-shadow:0 8px 22px rgba(0,0,0,.55); overflow:hidden; }
+  .ds-drop.open .ds-menu { display:block; }
+  .ds-menu-item { display:flex; align-items:center; gap:8px; padding:8px 12px; font-size:12px;
+                  color:var(--text); cursor:pointer; white-space:nowrap; }
+  .ds-menu-item:hover { background:#334155; }
+  .ds-menu-item.active { background:var(--accent); color:#06283d; font-weight:600; }
+  .ds-menu-head { padding:6px 12px 4px; font-size:10px; letter-spacing:.06em;
+                  text-transform:uppercase; color:var(--muted); }
+  #filter { width:180px; padding:4px 10px; border-radius:6px; border:1px solid #334155; background:#0f172a; color:var(--text); font-size:12px; }
+  #canvas { flex:1; position:relative; min-height:0; }
+  #net { position:absolute; inset:0; }
+  #legend-panel { position:fixed; top:42px; right:0; bottom:0; width:300px; background:var(--panel); border-left:1px solid #334155; box-shadow:-4px 0 16px rgba(0,0,0,.4); padding:14px; overflow-y:auto; transform:translateX(100%); transition:transform .2s ease; z-index:40; }
+  #legend-panel.open { transform:translateX(0); }
+  #legend-panel[hidden] { display:none; }
+  /* Usynlig bjælke i højre side (DNA 2026-10-16): dobbeltklik åbner/lukker
+     sidepanelet. 2 cm bred, usynlig, fuld højde under topbaren. */
+  #side-tap { position:fixed; top:0; right:0; bottom:0; width:2cm; z-index:38; cursor:pointer; display:flex; align-items:center; justify-content:center; }
+  /* Usynlig bjælke i bunden (DNA 2026-10-16): dobbeltklik åbner/lukker
+     bundpanelet. 2 cm høj, usynlig, fuld bredde. */
+  #bottom-tap { position:fixed; left:0; right:0; bottom:0; height:2cm; z-index:38; cursor:pointer; display:flex; align-items:center; justify-content:center; }
+  .tap-dot { width:12px; height:12px; border-radius:50%; background:var(--accent); opacity:.45; box-shadow:0 0 6px rgba(56,189,248,.55); transition:opacity .15s, transform .15s; }
+  #side-tap:hover .tap-dot, #bottom-tap:hover .tap-dot { opacity:1; transform:scale(1.2); }
+
+  #bottom-panel { height:240px; min-height:96px; max-height:70vh; background:#0b1220; border-top:1px solid #334155; display:flex; flex-direction:column; flex-shrink:0; flex-grow:0; z-index:20; }
+  #bottom-handle { height:14px; cursor:row-resize; background:#1e293b; flex-shrink:0; display:flex; align-items:center; justify-content:center; user-select:none; }
+  #bottom-handle .chev:hover { color:#38bdf8; }
+  #handle-chevron { color:#475569; font-size:11px; line-height:1; cursor:pointer; width:18px; height:14px; display:flex; align-items:center; justify-content:center; }
+  #bottom-panel.closed #bottom-body { display:none; }
+  #bottom-panel.closed { height:14px !important; min-height:14px; }
+  #bottom-panel.closed #handle-chevron { transform:rotate(180deg); }
+  h1 { font-size:15px; margin:0 0 8px; color:var(--accent); }
+  .stat { margin:6px 0; color:var(--muted); }
+  .stat b { color:var(--text); }
+  label.smol { display:block; margin-top:10px; color:var(--muted); }
+  .row { display:flex; gap:6px; flex-wrap:wrap; }
+  .icon-btn { width:34px; height:34px; padding:0; font-size:16px; border-radius:8px; background:#334155; color:var(--text); border:1px solid #475569; display:flex; align-items:center; justify-content:center; cursor:pointer; }
+  .icon-btn:hover { filter:brightness(1.25); }
+  .icon-btn.active { background:var(--accent); color:#06283d; border-color:var(--accent); }
+  .lbl { margin:10px 0 4px; color:var(--muted); font-size:12px; }
+  .legend { margin-top:8px; }
+  .legend-item { display:flex; align-items:center; gap:8px; margin:3px 0; color:var(--muted); font-size:12px; cursor:pointer; user-select:none; border-radius:5px; padding:1px 4px; transition:background .12s, opacity .12s; }
+  .legend-item.off { opacity:.35; }
+  /* DNA 2026-10-02: tre funktioner på samme linje.
+     peg = lys op i grafen · klik = hold fast · dobbeltklik = tænd/sluk */
+  .legend-item.hover { background:#1e3a5f; }
+  .legend-item.pinned { background:var(--accent); color:#06283d; font-weight:600; }
+  .legend-item.pinned .legend-count { opacity:.85; }
+  /* Skillelinje mellem Domæner (forælder) og Labels (barn) */
+  .legend-rule { height:1px; background:#334155; margin:12px 0 4px; }
+  .lbl-dom { color:#e2e8f0; font-weight:600; }
+  .lbl-lab { color:#94a3b8; }
+  /* AFSNITS-overskrift i labels — nu KLIKBAR :
+     peg = lys op · enkeltklik = hold fast · dobbeltklik = tænd/sluk alt
+     under kategorien. Ser ud som domænelinjerne. */
+  .legend-child-of { margin:8px 0 2px; padding:3px 6px; color:#94a3b8; font-size:11px;
+    text-transform:uppercase; letter-spacing:.4px; border-radius:4px;
+    display:flex; align-items:center; gap:5px; cursor:pointer; user-select:none; }
+  .legend-child-of:hover { background:#1e293b; color:#e2e8f0; }
+  .legend-child-of.pinned { background:#334155; color:#fff; box-shadow:0 0 0 1px #38bdf8; }
+  .legend-child-of .legend-count { margin-left:auto; opacity:.6; font-size:10px; }
+  .legend-kid { padding-left:14px; }
+  .dot { width:10px; height:10px; border-radius:50%; display:inline-block; flex-shrink:0; }
+  .legend-count { font-size:10px; opacity:.7; margin-left:4px; }
+  .legend-navn { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  /* STATUSLYS : grøn prik = tændt, mørk = slukket.
+     Gælder ALLE linjer: domæne, afsnit, agent (forælder) og barn. */
+  .status { width:9px; height:9px; border-radius:50%; flex:none;
+    background:#334155; box-shadow:inset 0 0 0 1px #475569;
+    transition:background .12s, box-shadow .12s; }
+  .legend-item.on .status, .legend-child-of.on .status {
+    background:#4ade80; box-shadow:0 0 7px #4ade80; }
+  .legend-item.hover .status { transform:scale(1.25); }
+  /* ●/○ som ekstra indikator — grøn når tændt */
+  .legend-knap { font-size:13px; line-height:1; opacity:.75; padding:0 4px; border-radius:3px; flex:none;
+    transition:color .12s, opacity .12s; }
+  .legend-item.on .legend-knap { color:#4ade80; opacity:1; }
+  .legend-item.off .legend-knap { color:#64748b; }
+  /* Alt-eller-intet-knap pr. afsnit  */
+  .alt-knap { font-size:10px; padding:2px 7px; margin-left:6px; border-radius:9px;
+    background:#1e293b; color:#94a3b8; border:1px solid #334155; cursor:pointer;
+    transition:background .12s, color .12s; vertical-align:middle; }
+  .alt-knap:hover { background:#334155; color:#e2e8f0; }
+  /* Label-overskrift + del-felter  */
+  .legend-lab-head { background:#141c2b; border-left:2px solid #334155;
+    padding-left:6px; margin-top:6px; font-weight:600; font-size:12px; }
+  .legend-lab-head.on { border-left-color:#4ade80; }
+  .legend-del { padding-left:26px; font-size:11px; color:#94a3b8; }
+  .legend-del .legend-navn { font-weight:400; }
+  #sel-info { margin-top:10px; font-size:12px; color:var(--muted); white-space:pre-wrap; word-break:break-word; border-top:1px solid #334155; padding-top:8px; }
+  #tooltip { position:absolute; display:none; z-index:100; background:#0f172a; border:1px solid var(--accent); border-radius:6px; padding:6px 8px; font-size:11px; color:var(--text); max-width:320px; white-space:pre-wrap; word-break:break-word; pointer-events:none; box-shadow:0 4px 12px rgba(0,0,0,.5); }
+  /* ===== Bundpanel (VS Code-terminal-stil) ===== */
+  #bottom-panel { height:240px; min-height:96px; max-height:70vh; background:#0b1220; border-top:1px solid #334155; display:flex; flex-direction:column; }
+  #bottom-handle { height:8px; cursor:row-resize; background:#1e293b; flex-shrink:0; display:flex; align-items:center; justify-content:center; user-select:none; }
+  #bottom-handle::after { content:'⋯'; color:#475569; font-size:10px; letter-spacing:4px; }
+  #bottom-body { display:flex; flex:1; min-height:0; }
+  #bottom-meta { width:280px; flex-shrink:0; border-right:1px solid #334155; padding:10px; overflow-y:auto; font-size:12px; color:var(--muted); }
+  #bottom-meta b { color:var(--text); }
+  #bottom-content { flex:1; min-width:0; display:flex; flex-direction:column; }
+  #bottom-tabs { display:flex; gap:4px; padding:6px 10px 0; background:#0f172a; border-bottom:1px solid #334155; flex-shrink:0; overflow-x:auto; }
+  .btab { background:#1e293b; color:var(--muted); border:1px solid #334155; border-bottom:none; border-radius:6px 6px 0 0; padding:4px 12px; font-size:11px; cursor:pointer; }
+  .btab.active { background:#0b1220; color:var(--text); border-color:var(--accent); }
+  #bottom-scroll { flex:1; overflow:auto; padding:10px 14px; font-size:12px; color:var(--text); white-space:pre-wrap; word-break:break-word; line-height:1.5; }
+  /* ===== Noter (Obsidian via Ops, port 6122) ===== */
+  #noter-pane { flex:1; display:flex; flex-direction:column; min-height:0; }
+  #noter-pane[hidden] { display:none; }
+  #noter-hoved { display:flex; align-items:center; gap:10px; padding:6px 10px 4px; flex-shrink:0; }
+  #noter-filter { flex:0 0 260px; background:#0f172a; color:var(--text); border:1px solid #334155; border-radius:6px; padding:4px 8px; font-size:12px; }
+  #noter-tal { color:var(--muted); font-size:11px; }
+  #noter-krop { flex:1; display:flex; gap:10px; min-height:0; padding:0 10px 8px; }
+  #noter-liste { width:290px; flex-shrink:0; margin:0; padding:0; list-style:none; overflow:auto; border:1px solid #334155; border-radius:6px; background:#0b1220; }
+  #noter-liste li { padding:5px 9px; font-size:12px; cursor:pointer; border-bottom:1px solid #1e293b; display:flex; justify-content:space-between; gap:8px; }
+  #noter-liste li:hover { background:#1e293b; }
+  #noter-liste li b { color:var(--text); font-weight:500; }
+  #noter-liste li span { color:var(--muted); font-size:10px; white-space:nowrap; }
+  #noter-liste li.tom { color:var(--muted); cursor:default; }
+  #noter-tekst { flex:1; min-width:0; overflow:auto; padding:10px 13px; font:12.5px/1.65 ui-monospace,SFMono-Regular,Consolas,monospace; white-space:pre-wrap; word-break:break-word; background:#0b1220; border:1px solid #334155; border-radius:6px; color:var(--text); }
+  .meta-row { margin:3px 0; }
+  .meta-row .k { color:var(--muted); font-size:10px; text-transform:uppercase; letter-spacing:.4px; }
+</style>
+</head>
+<body>
+
+<div id="wrap">
+  <div id="topbar">
+    <span class="brand">
+      <span class="brand-top">
+        <span class="ttl">Helix Super Brain</span>
+        <span class="led gul" id="led" title="Status"></span>
+      </span>
+      <span class="brand-sub">Noder <b id="stat-nodes">—</b> · Kanter <b id="stat-edges">—</b></span>
+    </span>
+    <span class="grow"></span>
+    <span class="grp" title="Datasæt">
+      <span class="ds-drop" id="drop-hjerne">
+        <button class="ds-btn active" id="ds-hjerne" title="Super Brain: vælg kilde (Super Brains egen graf eller Obsidian)" onclick="toggleDrop('drop-hjerne')">🧠 Super Brain ▾</button>
+        <div class="ds-menu">
+          <div class="ds-menu-head">Vælg visning</div>
+          <div class="ds-menu-item active" id="mi-ag" onclick="loadGraph(); lukDrop()">🧠 Super Brain <span style="color:var(--muted)">(database)</span></div>
+          <div class="ds-menu-item" id="mi-ops" onclick="loadOps(); lukDrop()">🗂 OPS <span style="color:var(--muted)">(Obsidian)</span></div>
+        </div>
+      </span>
+      <span class="ds-drop" id="drop-efter">
+        <button class="ds-btn" id="ds-efterforskning" title="Undersøgelser — vælg en" onclick="toggleDrop('drop-efter')">🔎 Efterforskning ▾</button>
+        <div class="ds-menu" id="drop-efter-menu">
+          <div class="ds-menu-head">Undersøgelser</div>
+          <div class="ds-menu-item" onclick="loadEfterforskning(); lukDrop()">🔎 Indlæser…</div>
+        </div>
+      </span>
+    </span>
+    <span class="grp" title="Visning og indstillinger">
+      <span class="ds-drop" id="drop-visning">
+        <button class="ds-btn" id="ds-visning" title="Grafiske visninger" onclick="toggleDrop('drop-visning')">🖼 Visning ▾</button>
+        <div class="ds-menu">
+          <div class="ds-menu-head">Grafiske visninger</div>
+          <div class="ds-menu-item active" id="mi-mode-force" onclick="setMode('force'); lukDrop()">🕸 Flydende</div>
+          <div class="ds-menu-item" id="mi-mode-radial" onclick="setMode('radial'); lukDrop()">◎ Radialt</div>
+          <div class="ds-menu-item" id="mi-mode-tree" onclick="setMode('tree'); lukDrop()">🌳 Træ</div>
+          <div class="ds-menu-item" id="mi-mode-grid" onclick="setMode('grid'); lukDrop()">▦ Gitter</div>
+          <div class="ds-menu-item" onclick="fitToScreen(); lukDrop()">⛶ Fit to screen</div>
+        </div>
+      </span>
+      <span class="ds-drop" id="drop-indstillinger">
+        <button class="ds-btn" id="ds-indstillinger" title="Indstillinger" onclick="toggleDrop('drop-indstillinger')">⚙ Indstillinger ▾</button>
+        <div class="ds-menu">
+          <div class="ds-menu-head">Indstillinger</div>
+          <div class="ds-menu-item" id="mi-loose" onclick="toggleLoose(); lukDrop()">◌ Noder uden tilhørsforhold</div>
+          <div class="ds-menu-item" id="mi-edge" onclick="toggleEdges(); lukDrop()">⤳ Kanter</div>
+          <div class="ds-menu-item" onclick="loadGraph(); lukDrop()">↻ Genindlæs graf</div>
+          <div class="ds-menu-item" id="mi-noter" onclick="toggleNoter(); lukDrop()">📝 Noter</div>
+        </div>
+      </span>
+    </span>
+    <span class="grow"></span>
+    <span class="statsep"><input id="filter" placeholder="Søg i noder..." oninput="applyFilter(this.value)"></span>
+    <span id="status" title="Status">Indlæser...</span>
+  </div>
+
+  <div id="canvas"><div id="net"></div><div id="tooltip"></div></div>
+
+  <div id="side-tap" title="Dobbeltklik for domæner/kategorier"><span class="tap-dot"></span></div>
+  <div id="bottom-tap" title="Dobbeltklik for at åbne/lukke"><span class="tap-dot"></span></div>
+
+  <div id="legend-panel">
+    <div class="legend" id="legend"></div>
+  </div>
+
+  <div id="bottom-panel">
+    <div id="bottom-handle" title="Dobbeltklik for at lukke/åbne">
+      <span id="handle-chevron">▾</span>
+    </div>
+    <div id="bottom-body">
+      <div id="bottom-meta">
+        <div id="meta-name"><b>—</b></div>
+        <div class="meta-row"><div class="k">Type</div><div id="meta-type">—</div></div>
+        <div class="meta-row"><div class="k">Rolle</div><div id="meta-rolle">—</div></div>
+        <div class="meta-row"><div class="k">Tidsstempel</div><div id="meta-timestamp">—</div></div>
+        <div class="meta-row"><div class="k">Dato / dag</div><div id="meta-dato">—</div></div>
+        <div id="meta-extra"></div>
+      </div>
+      <div id="bottom-content">
+        <div id="bottom-tabs"></div>
+        <div id="bottom-scroll">Klik på en node i grafen for at se dens indhold her.</div>
+        <div id="noter-pane" hidden>
+          <div id="noter-hoved">
+            <input id="noter-filter" placeholder="Filtrér noter (navn eller mappe)..." oninput="visNoter(this.value)">
+            <span id="noter-tal">—</span>
+            <span style="color:#94a3b8;font-size:11px">Obsidian via Ops · port 6122</span>
+          </div>
+          <div id="noter-krop">
+            <ul id="noter-liste"></ul>
+            <article id="noter-tekst">Vælg en note i listen.</article>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
+<script>
+// ===== Second Brain Graph Viewer (vis.js) — kvalitet, ikke lappeløsning =====
+let dataAll = null;          // hele datasættet fra API
+let filteredNodes = null;    // aktuelt vist udsnit
+let filteredEdges = null;
+let network = null;
+let currentMode = 'force';
+let hideLoose = false;
+let hideEdges = false;
+let hiddenGroups = new Set();
+// DNA 2026-10-16: Samtalen (den rå maskin-log mellem DNA og Hermes) er tung og
+// vokser eksplosivt — den hører ikke hjemme som standard-visning i grafen. Den
+// skjules som udgangspunkt, men kan tændes manuelt (●/○) eller med "Vis alle".
+const DEFAULT_SKJULT = ['Samtalen'];
+let hiddenLabels = new Set();
+let hiddenEdgeTypes = new Set();   // DNA 2026-10-16: slukkede kanttyper
+let groupCounts = {};
+const LS_KEY = 'sb-graph-prefs';
+// DNA 2026-10-02: hvert DATASÆT (AG, OPS, Efterforskning) har sit EGET sæt af
+// slukkede labels og tændte børn. Ellers smittede det ene datasæt af på det
+// andet, og labels stod tændt når man skiftede. hiddenLabels/visteDele
+// nedenfor er altid det AKTIVE datasæts sæt.
+let hiddenLabelsAlle = {};   // { ds: [nøgler] }
+let visteDeleAlle = {};      // { ds: [nøgler] }
+let aktivDS = 'hjerne';
+
+function savePrefs() {
+  try {
+    // Gem det aktive datasæts sæt tilbage i samlingen før lagring.
+    hiddenLabelsAlle[aktivDS] = Array.from(hiddenLabels);
+    visteDeleAlle[aktivDS] = Array.from(visteDele);
+    localStorage.setItem(LS_KEY, JSON.stringify({
+      hideLoose, hideEdges,
+      hiddenGroups: Array.from(hiddenGroups),
+      hiddenEdgeTypes: Array.from(hiddenEdgeTypes),
+      hiddenLabelsAlle, visteDeleAlle,
+      efterforskningFix: 2,
+      currentMode
+    }));
+  } catch (e) { /* storage utilgængelig — ignorer */ }
+}
+function loadPrefs() {
+  try {
+    const raw = localStorage.getItem(LS_KEY);
+    if (!raw) {
+      // DNA 2026-10-16: ingen gemt tilstand endnu — start med Samtalen skjult.
+      DEFAULT_SKJULT.forEach(g => hiddenGroups.add(g));
+      return;
+    }
+    const p = JSON.parse(raw);
+    hideLoose = !!p.hideLoose;
+    hideEdges = !!p.hideEdges;
+    currentMode = p.currentMode || 'force';
+    hiddenGroups = new Set(Array.isArray(p.hiddenGroups) ? p.hiddenGroups.filter(Boolean) : []);
+    hiddenEdgeTypes = new Set(Array.isArray(p.hiddenEdgeTypes) ? p.hiddenEdgeTypes.filter(Boolean) : []);
+    hiddenLabelsAlle = p.hiddenLabelsAlle || {};
+    visteDeleAlle = p.visteDeleAlle || {};
+    // DNA 2026-10-16: Samtalen skal være skjult som udgangspunkt. Markøren
+    // sikrer at vi kun pålægger defaulten ÉN gang — bagefter gælder brugerens
+    // eget valg (tændt/slukket) fra localStorage.
+    if (!p.samtalDefaultSat) {
+      DEFAULT_SKJULT.forEach(g => hiddenGroups.add(g));
+      p.samtalDefaultSat = true;
+      try { localStorage.setItem(LS_KEY, JSON.stringify(p)); } catch (e) {}
+    }
+    // MIGRERING : en tidligere fejl lagde ALLE efterforsknings-
+    // noder i skjulepositionen, så børnesagens graf var tom. Ryd den post.
+    if (p.efterforskningFix !== 2) {
+      delete hiddenLabelsAlle['efterforskning'];
+      delete visteDeleAlle['efterforskning'];
+    }
+  } catch (e) { /* korrupt/ingen lagring — start frisk */ }
+}
+
+// Skift til et datasæts EGNE sæt af skjulte labels / tændte børn.
+//
+// DNA 2026-10-02 — VIGTIGT: kun datasæt med forælder/barn-struktur (noder
+// med et `age`-felt: OPS og AG) må starte med skjulte labels. Efterforskning
+// (Flowsint) har INGEN age-felter — dér ville "skjul alle labels" skjule
+// HELE grafen, fordi alle noder i en gruppe deler samme nøgle. Den fejl
+// kostede en undersøgelse. Derfor tjekkes strukturen.
+function skiftDatasæt(ds, nodes) {
+  const harLabels = (nodes || []).some(n => 'age' in n && n.age);
+  if (!(ds in hiddenLabelsAlle)) {
+    // DNA 2026-10-16: Efterforskning skal ALTID starte med ALT synligt.
+    // Den gamle graf har age-felter, men den er en undersøgelse man vil SE —
+    // ikke et indeks man tænder op i. Ellers står efterforskningen tom.
+    const startSkjult = harLabels && ds !== 'efterforskning';
+    hiddenLabelsAlle[ds] = startSkjult ? (nodes || []).map(n => labelKey(n)) : [];
+    visteDeleAlle[ds] = [];
+  }
+  aktivDS = ds;
+  hiddenLabels = new Set(hiddenLabelsAlle[ds] || []);
+  visteDele = new Set(visteDeleAlle[ds] || []);
+}
+
+const DEFAULT_SUBSET = 300;
+
+const groupColors = [
+  '#38bdf8','#f472b6','#a78bfa','#34d399','#fbbf24','#fb7185','#22d3ee','#a3e635',
+  '#f97316','#64748b','#e879f9','#84cc16','#14b8a6','#f43f5e','#818cf8','#facc15'
+];
+const colorCache = {};
+function colorFor(g) {
+  g = String(g || '?');
+  if (colorCache[g]) return colorCache[g];
+  let h = 0;
+  for (let i=0;i<g.length;i++) h = (h*31 + g.charCodeAt(i)) % 997;
+  colorCache[g] = groupColors[h % groupColors.length];
+  return colorCache[g];
+}
+
+function layoutFor(mode) {
+  switch (mode) {
+    case 'radial': return {
+      hierarchical: { enabled: false },
+      physics: false,
+      // radial: manuel læg noder i cirkler pr. gruppe nedenfor
+    };
+    case 'tree': return {
+      hierarchical: { enabled: true, direction: 'LR', sortMethod: 'directed',
+                      nodeSpacing: 90, levelSeparation: 180, treeSpacing: 40 },
+      physics: false
+    };
+    case 'grid': return {
+      hierarchical: { enabled: false },
+      physics: false
+    };
+    case 'force':
+    default: return {
+      hierarchical: { enabled: false },
+      physics: {
+        enabled: true,
+        stabilization: { enabled: true, iterations: 250, updateInterval: 25 },
+        solver: 'forceAtlas2Based',
+        forceAtlas2Based: { gravitationalConstant: -28, centralGravity: 0.015,
+                            springLength: 130, springConstant: 0.07, damping: 0.92,
+                            barnesHutOptimize: true, barnesHutTheta: 0.5 },
+        minVelocity: 0.8
+      }
+    };
+  }
+}
+
+function optionsFor(mode) {
+  return {
+    autoResize: true,
+    layout: layoutFor(mode),
+    physics: layoutFor(mode).physics,
+    nodes: {
+      shape: 'dot',
+      size: 14,
+      color: { border: '#0f172a', background: '#38bdf8', highlight: { border: '#fff', background: '#f472b6' } },
+      font: { color: '#e2e8f0', size: 12, face: 'Segoe UI' },
+      borderWidth: 1,
+      shadow: false
+    },
+    edges: {
+      arrows: { to: { enabled: true, scaleFactor: 0.6 } },
+      color: { color: '#64748b', highlight: '#f472b6' },
+      font: { color: '#94a3b8', size: 10, align: 'middle' },
+      smooth: { enabled: true, type: 'continuous' },
+      width: 1
+    },
+    interaction: {
+      hover: true,
+      dragNodes: true,
+      dragView: true,
+      zoomView: true,
+      tooltipDelay: 150
+    }
+  };
+}
+
+// byg vis.js nodes/edges fra data — med navne på noder OG kanter
+function buildVis(nodes, edges) {
+  // DNA 2026-10-16: tunge hub-noder (Samtalen, Dios børnesag) har så mange
+  // kanter at de står og flakker. Giv dem masse der VOKSER GLIDENDE med antal
+  // kanter — jo flere forbindelser, jo tungere node. Så falder de tunge til ro
+  // af sig selv, mens de lette flyder frit. Reglen følger automatisk med til en
+  // ny installation, fordi den kun kigger på antallet af kanter.
+  const grad = {};
+  edges.forEach(e => { grad[e.from] = (grad[e.from] || 0) + 1; grad[e.to] = (grad[e.to] || 0) + 1; });
+  const massFor = id => {
+    const g = grad[id] || 0;
+    if (g <= 0) return 1;
+    // glidende: én ekstra masseenhed pr. 25 kanter, loft ved 40 så de tungeste
+    // ikke bliver helt umulige at trække rundt.
+    return Math.min(1 + g / 25, 40);
+  };
+  return {
+    nodes: nodes.map(n => ({
+      id: String(n.id),
+      label: n.label || '?',
+      group: n.group || '?',
+      mass: massFor(n.id),
+      color: { border: '#0f172a', background: colorFor(n.group),
+               highlight: { border: '#fff', background: '#f472b6' } },
+      font: { color: '#e2e8f0', size: 14 },
+      title: (n.props && Object.keys(n.props).length)
+        ? Object.keys(n.props).map(k => k + ': ' + String(n.props[k]).slice(0,200)).join('\n')
+        : (n.label || '?')
+    })),
+    edges: edges.map(e => ({
+      id: String(e.id),
+      from: String(e.from),
+      to: String(e.to),
+      label: e.label || '',
+      arrowStrikethrough: false,
+      title: e.label || ''
+    }))
+  };
+}
+
+function initNetwork() {
+  const container = document.getElementById('net');
+  container.innerHTML = '<div id="tooltip" style="display:none"></div>';
+  if (!filteredNodes || !filteredNodes.length) return;
+  const data = buildVis(filteredNodes, filteredEdges || []);
+  // radial: læg noder i cirkler pr. gruppe
+  if (currentMode === 'radial') {
+    const groups = {};
+    data.nodes.forEach(n => { (groups[n.group] = groups[n.group] || []).push(n); });
+    const keys = Object.keys(groups);
+    const total = keys.length;
+    let angle = 0;
+    keys.forEach((g, i) => {
+      const arr = groups[g];
+      const radius = 180 + (i % 4) * 90;
+      const a0 = (i / total) * Math.PI * 2;
+      arr.forEach((n, j) => {
+        const a = a0 + (j / Math.max(arr.length,1)) * 0.8;
+        n.x = radius * Math.cos(a);
+        n.y = radius * Math.sin(a);
+      });
+    });
+  }
+  if (currentMode === 'grid') {
+    data.nodes.forEach((n, i) => { n.x = (i % 15) * 130; n.y = Math.floor(i / 15) * 130; });
+  }
+  network = new vis.Network(container, data, optionsFor(currentMode));
+  window.gnet = network; // eksponér til test/fjernstyring
+  // DNA 2026-10-16: fysikken skal ALTID være flydende, så noderne selv lægger
+  // sig i klynger og mønstre. Vi fryser INTET — vi dæmper kun oscillationen
+  // (damping + minVelocity i layoutet), så de noder der ellers ville stå og
+  // flakke frem og tilbage, falder til ro. Trækker man i en node, følger dens
+  // klynge med, fordi fysikken hele tiden er tændt.
+  network.on('click', evt => {
+    if (evt.nodes && evt.nodes.length) {
+      const id = evt.nodes[0];
+      const allNodes = filterFullNodes();
+      const n = allNodes.find(x => String(x.id) === id);
+      if (n) showSelected(n);
+    }
+  });
+  // DNA 2026-10-02: DOBBELTKLIK UDE I SELVE GRAFEN — samme system som i
+  // sidebar'en, blot på den grafiske flade:
+  //   dobbeltklik på en agent-boble  -> dens børn (ting) dukker frem
+  //   dobbeltklik igen                -> de forsvinder igen
+  //   dobbeltklik på et barn         -> kun det barn vises
+  network.on('doubleClick', evt => {
+    if (!evt.nodes || !evt.nodes.length) return;
+    const n = filterFullNodes().find(x => String(x.id) === String(evt.nodes[0]));
+    if (!n) return;
+    grafDblKlik(n);
+  });
+  // NOTE: Ingen efterfølgende fit() her — den fik grafen til at hoppe tilbage
+  // når DNA zoomede (zoom virkede ikke i noget mønster, 2026-09-16). Zoom/pan
+  // er nu helt frit. Fit sker kun eksplicit via fitToScreen().
+}
+
+// grafDblKlik: tænd/sluk direkte fra grafen .
+//   agent-boble  -> dens børn (ting) dukker frem; dobbeltklik igen = væk
+//   barn-boble   -> kun det barn tændes/slukkes
+// Agenten selv bliver STÅENDE i grafen, så man kan klikke igen.
+function grafDblKlik(n) {
+  const key = labelKey(n);
+  const alle = (dataAll.nodes || []);
+  if (n.arbejde === '1') {
+    // Det er et BARN under en agent — tænd/sluk kun det.
+    const dkey = key + '\u0001' + (n.del || '');
+    if (visteDele.has(dkey)) {
+      visteDele.delete(dkey);
+    } else {
+      visteDele.add(dkey);
+      hiddenLabels.delete(key);            // forælderen skal vises
+    }
+    savePrefs(); applyHidden(); renderLegend(); initNetwork();
+    return;
+  }
+  // Det er en AGENT (eller et domæne): tænd/sluk dens BØRN.
+  const børn = [...new Set(alle
+    .filter(x => labelKey(x) === key && x.arbejde === '1')
+    .map(x => key + '\u0001' + (x.del || '')))];
+  hiddenLabels.delete(key);                // agenten bliver stående
+  const alleTændt = børn.length > 0 && børn.every(k => visteDele.has(k));
+  if (alleTændt) {
+    børn.forEach(k => visteDele.delete(k));      // skjul indholdet
+  } else {
+    børn.forEach(k => visteDele.add(k));         // vis indholdet
+  }
+  savePrefs(); applyHidden(); renderLegend(); initNetwork();
+}
+
+function filterFullNodes() {
+  return (filteredNodes && filteredNodes.length) ? filteredNodes : (dataAll ? dataAll.nodes : []);
+}
+
+// ===== OPS: lokal nabo-opslag og søgning (ids er filstier, ikke AGE-tal) =====
+// Samme svarform som api/neighbors, så resten af showSelected virker uændret.
+function naboerLokalt(n) {
+  const alle = (dataAll && dataAll.nodes) || [];
+  const kanter = (dataAll && dataAll.edges) || [];
+  const id = String(n.id);
+  const ramte = kanter.filter(e => String(e.from) === id || String(e.to) === id);
+  if (!ramte.length) return { match: false, nodes: [], edges: [] };
+  const naboIds = new Set();
+  ramte.forEach(e => {
+    const anden = (String(e.from) === id) ? String(e.to) : String(e.from);
+    if (anden !== id) naboIds.add(anden);
+  });
+  const noder = [n].concat(
+    alle.filter(x => naboIds.has(String(x.id)))
+  );
+  return {
+    match: true,
+    nodeCount: noder.length,
+    edgeCount: ramte.length,
+    nodes: noder,
+    edges: ramte.map(e => ({ from: e.from, to: e.to, label: e.label })),
+  };
+}
+
+function søgLokalt(q) {
+  const needle = q.toLowerCase();
+  const alle = (dataAll && dataAll.nodes) || [];
+  const kanter = (dataAll && dataAll.edges) || [];
+  const ramte = alle.filter(n => {
+    const p = (n.props && typeof n.props === 'object') ? n.props : {};
+    const tekst = [n.label, n.group, n.age, n.role, p.sti, p.titel]
+      .concat(Object.values(p)).map(v => String(v == null ? '' : v)).join(' ').toLowerCase();
+    return tekst.includes(needle);
+  });
+  const ids = new Set(ramte.map(n => String(n.id)));
+  const eRamte = kanter.filter(e => ids.has(String(e.from)) && ids.has(String(e.to)));
+  return { match: ramte.length > 0, nodeCount: ramte.length,
+           edgeCount: eRamte.length, nodes: ramte,
+           edges: eRamte.map(e => ({ from: e.from, to: e.to, label: e.label })) };
+}
+
+// ===== Datasæt =====
+// Faste datasæt: AG-grafen (Apache AGE), OPS (Obsidian-vaulten) og
+// "Efterforskning" (børnesagens netværk, bygget i Flowsint).
+// DNA 2026-10-02: Hjerne-knappen er en DROPDOWN — man vælger hvilken hjerne
+// man kigger i. Knappen og statusfeltet skifter navn med valget.
+let aktivHjerne = 'AG';
+
+// DNA 2026-10-16: statusfeltet er nu en lysdiode (LED) ved siden af titlen i
+// stedet for en lang tekst. Gul/blink = henter/uploader, grøn = hentet/klar,
+// rød = fejl. Selve teksten gemmes i et skjult statusfelt (tooltip).
+function sætStatus(tekst) {
+  const st = document.getElementById('status');
+  if (st) st.textContent = tekst;
+  const led = document.getElementById('led');
+  if (!led) return;
+  led.title = tekst || '';
+  const t = (tekst || '').toLowerCase();
+  if (/fejl|http|404|500|kunne ikke|ingen match/.test(t)) {
+    led.className = 'led roed';
+  } else if (/henter|indlæser|søger|upload/.test(t)) {
+    led.className = 'led gul';
+  } else {
+    led.className = 'led groen';
+  }
+}
+
+function toggleDrop(id) {
+  const d = document.getElementById(id);
+  if (!d) return;
+  const varÅben = d.classList.contains('open');
+  document.querySelectorAll('.ds-drop').forEach(x => x.classList.remove('open'));
+  if (!varÅben) d.classList.add('open');
+}
+function lukDrop() {
+  document.querySelectorAll('.ds-drop').forEach(x => x.classList.remove('open'));
+}
+// klik udenfor lukker menuerne
+document.addEventListener('click', ev => {
+  if (!ev.target.closest('.ds-drop')) lukDrop();
+});
+
+function markDataset(ds) {
+  const h = document.getElementById('ds-hjerne');
+  const e = document.getElementById('ds-efterforskning');
+  const miAg = document.getElementById('mi-ag');
+  const miOps = document.getElementById('mi-ops');
+  const miBørne = document.getElementById('mi-børne');
+  // Hjerne-knappen er aktiv når datasættet er AG eller OPS
+  if (h) h.classList.toggle('active', ds === 'hjerne' || ds === 'ops');
+  if (e) e.classList.toggle('active', ds === 'efterforskning');
+  if (miAg) miAg.classList.toggle('active', ds === 'hjerne');
+  if (miOps) miOps.classList.toggle('active', ds === 'ops');
+  if (miBørne) miBørne.classList.toggle('active', ds === 'efterforskning');
+  // Knap-navnet fortæller hvilken hjerne man står i
+  if (h) h.textContent = (ds === 'ops') ? '🧠 Hjerne OPS ▾' : '🧠 Hjerne AG Graf ▾';
+}
+
+async function loadDataset(url, ds, hentetekst) {
+  sætStatus(hentetekst);
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    dataAll = await res.json();
+    // Statusfeltet skriver hvilken database der blev hentet
+    const kilde = (ds === 'ops') ? 'OPS' : (ds === 'hjerne' ? 'Super Brain' : 'Efterforskning');
+    sætStatus('Graf hentet ' + kilde + ' ✓');
+    groupCounts = {};
+    (dataAll.nodes || []).forEach(n => { groupCounts[n.group] = (groupCounts[n.group]||0) + 1; });
+    document.getElementById('stat-nodes').textContent = dataAll.nodeCount;
+    document.getElementById('stat-edges').textContent = dataAll.edgeCount;
+    // DNA 2026-10-02: LABELS STARTER SKJULT pr. datasæt. Første gang du
+    // åbner AG/OPS/Efterforskning står alle labels skjult — derefter
+    // huskes dine egne valg for netop det datasæt.
+    skiftDatasæt(ds, dataAll.nodes);
+    // DNA 2026-10-13: husk hvilken visning man er i, så en opdatering genoptager
+    try { localStorage.setItem('viewer_kilde', ds); } catch (e) {}
+    markDataset(ds);
+    renderLegend();
+    syncPrefButtons();
+    applyHidden();
+    initNetwork();
+  } catch (e) {
+    sætStatus('Fejl: ' + e.message);
+  }
+}
+
+async function loadGraph() {
+  loadPrefs(); // genopret gemte valg (skjulte kategorier, kanter, løse, mode)
+  aktivHjerne = 'AG';
+  await loadDataset('api/graph', 'hjerne', 'Henter graf AG...');
+}
+
+async function loadOps() {
+  loadPrefs();
+  aktivHjerne = 'OPS';
+  await loadDataset('api/ops', 'ops', 'Henter graf OPS...');
+}
+
+async function loadEfterforskning(sketchId) {
+  loadPrefs();
+  if (sketchId) {
+    await loadDataset('api/efterforskning?sketch_id=' + encodeURIComponent(sketchId),
+                      'efterforskning', 'Henter efterforskning...');
+    return;
+  }
+  // Ingen sketch valgt (fx ved genoptag): tag den første fra Flowsint-listen.
+  try {
+    const res = await fetch('api/efterforskninger');
+    const d = await res.json();
+    const liste = (d && d.efterforskninger) || [];
+    for (const inv of liste) {
+      const s = (inv.sketches || [])[0];
+      if (s && s.id) {
+        await loadDataset('api/efterforskning?sketch_id=' + encodeURIComponent(s.id),
+                          'efterforskning', 'Henter efterforskning...');
+        return;
+      }
+    }
+    sætStatus('Ingen efterforskninger i Flowsint');
+  } catch (e) {
+    sætStatus('Fejl: ' + e.message);
+  }
+}
+
+// DNA 2026-10-16: hent efterforskningslisten fra Flowsint og fyld rullemenuen.
+// Hver efterforskning kan have flere grafer (sketches) — hver bliver et punkt.
+async function hentEfterforskninger() {
+  const menu = document.getElementById('drop-efter-menu');
+  if (!menu) return;
+  try {
+    const res = await fetch('api/efterforskninger');
+    const d = await res.json();
+    const liste = (d && d.efterforskninger) || [];
+    let html = '<div class="ds-menu-head">Undersøgelser</div>';
+    if (!liste.length) {
+      html += '<div class="ds-menu-item">Ingen efterforskninger i Flowsint endnu</div>';
+    }
+    liste.forEach(inv => {
+      const sketches = inv.sketches || [];
+      if (!sketches.length) {
+        html += '<div class="ds-menu-item" onclick="lukDrop()">🔎 ' +
+                (inv.navn || inv.id) + '</div>';
+        return;
+      }
+      sketches.forEach(s => {
+        html += '<div class="ds-menu-item" onclick="loadEfterforskning(\'' +
+                s.id + '\'); lukDrop()">🔎 ' +
+                (s.title || inv.navn || s.id) + '</div>';
+      });
+    });
+    menu.innerHTML = html;
+  } catch (e) {
+    menu.innerHTML = '<div class="ds-menu-head">Undersøgelser</div>' +
+      '<div class="ds-menu-item">Kunne ikke hente fra Flowsint</div>';
+  }
+}
+
+// Synkroniser topbar-knapperne med den gemte tilstand (marker aktive)
+function syncPrefButtons() {
+  const loose = document.getElementById('mi-loose');
+  if (loose) loose.classList.toggle('active', hideLoose);
+  const edge = document.getElementById('mi-edge');
+  if (edge) edge.classList.toggle('active', hideEdges);
+  ['force','radial','tree','grid'].forEach(m => {
+    const el = document.getElementById('mi-mode-' + m);
+    if (el) el.classList.toggle('active', m === currentMode);
+  });
+}
+
+function applyHidden() {
+  if (!dataAll) return;
+  // Domæne = forælder. Label = barn. Begge kan slukkes hver for sig.
+  // DNA 2026-10-02: agenternes ARBEJDE (noder med arbejde='1') er skjult som
+  // standard i OPS — grafen viser ellers hele arkivet i stedet for agenterne.
+  // Det kommer frem når man tænder den enkelte agents label.
+  let nodes = (dataAll.nodes||[]).filter(n => {
+    const g = n.group, a = n.age || '';
+    // Domæne slukket -> alt i det væk
+    if (hiddenGroups.has(g)) return false;
+    // Noder UDEN age (Efterforsknings-grafen) har ingen label-nøgle —
+    // de skal ALTID vises .
+    if (!n.age) return true;
+    // Label slukket -> hele agenten (familien) væk
+    if (hiddenLabels.has(g + '\u0000' + a)) return false;
+    // Barn (agentens ting) -> vises kun hvis det er tændt enkeltvis
+    if (n.arbejde === '1') {
+      const dkey = g + '\u0000' + a + '\u0001' + (n.del || '');
+      if (!visteDele.has(dkey)) return false;
+    }
+    // Barn slukket enkeltvis
+    if (hiddenLabels.has(g + '\u0000' + a + '\u0001' + (n.del || ''))) return false;
+    return true;
+  });
+  let edges = (dataAll.edges||[]).filter(e => !hideEdges);
+  // DNA 2026-10-16: slukkede kanttyper filtreres fra — ligesom domæner.
+  edges = edges.filter(e => !hiddenEdgeTypes.has(e.label || ''));
+  const ids = new Set(nodes.map(n => String(n.id)));
+  edges = edges.filter(e => ids.has(String(e.from)) && ids.has(String(e.to)));
+  if (hideLoose) {
+    const connected = new Set();
+    edges.forEach(e => { connected.add(String(e.from)); connected.add(String(e.to)); });
+    nodes = nodes.filter(n => connected.has(String(n.id)));
+  }
+  if (!hideLoose && edges.length > 0) {
+    const degree = {};
+    edges.forEach(e => { degree[e.from]=(degree[e.from]||0)+1; degree[e.to]=(degree[e.to]||0)+1; });
+    nodes.sort((a,b) => (degree[b.id]||0) - (degree[a.id]||0));
+    // DNA 2026-10-02: når et domæne/label er SLAKKET, skal det synlige sæt
+    // respektere det — ellers forsvinder de få noder i mængden.
+    // Er der slukket for noget, tages ALLE de tilbageværende med.
+    // Desuden: er hele datasættet lille nok (fx OPS med ~465 noder), vises alt —
+    // så fremhævning af et domæne rammer HELE domænet, ikke kun en delmængde.
+    const nogetSlukket = hiddenGroups.size > 0 || hiddenLabels.size > 0;
+    const lilleNok = (dataAll.nodes || []).length <= 800;
+    if (!nogetSlukket && !lilleNok) {
+      nodes = nodes.slice(0, DEFAULT_SUBSET);
+      const subIds = new Set(nodes.map(n => String(n.id)));
+      edges = edges.filter(e => subIds.has(String(e.from)) && subIds.has(String(e.to)));
+    }
+  }
+  filteredNodes = nodes;
+  filteredEdges = edges;
+  document.getElementById('stat-nodes').textContent = nodes.length;
+  document.getElementById('stat-edges').textContent = edges.length;
+}
+
+function setMode(mode) {
+  currentMode = mode;
+  ['force','radial','tree','grid'].forEach(m => {
+    const el = document.getElementById('mi-mode-' + m);
+    if (el) el.classList.toggle('active', m === mode);
+  });
+  initNetwork();
+}
+
+function toggleLoose() {
+  hideLoose = !hideLoose;
+  const btn = document.getElementById('mi-loose');
+  if (btn) btn.classList.toggle('active', hideLoose);
+  sætStatus(hideLoose ? 'Løse noder skjult' : 'Løse noder vist');
+  savePrefs(); applyHidden(); initNetwork();
+}
+function toggleEdges() {
+  hideEdges = !hideEdges;
+  const btn = document.getElementById('mi-edge');
+  if (btn) btn.classList.toggle('active', hideEdges);
+  sætStatus(hideEdges ? 'Kanter skjult' : 'Kanter vist');
+  savePrefs(); applyHidden(); initNetwork();
+}
+// DNA 2026-10-16: tænd/sluk ÉN kanttype ad gangen (dobbeltklik i sidepanelet).
+function toggleKantType(t, el) {
+  if (hiddenEdgeTypes.has(t)) hiddenEdgeTypes.delete(t); else hiddenEdgeTypes.add(t);
+  const on = !hiddenEdgeTypes.has(t);
+  if (el) {
+    el.classList.toggle('on', on); el.classList.toggle('off', !on);
+    const k = el.querySelector('.legend-knap');
+    if (k) k.textContent = on ? '●' : '○';
+  }
+  savePrefs(); applyHidden(); initNetwork();
+}
+function fitToScreen() {
+  if (network) network.fit({ animation: true });
+}
+
+function toggleGroup(group, el) {
+  if (hiddenGroups.has(group)) hiddenGroups.delete(group); else hiddenGroups.add(group);
+  const on = !hiddenGroups.has(group);
+  el.classList.toggle('on', on);
+  el.classList.toggle('off', !on);
+  const k = el.querySelector('.legend-knap');
+  if (k) k.textContent = on ? '●' : '○';
+  savePrefs(); applyHidden(); initNetwork();
+}
+
+// ===== Labels er BØRN under domænet  =====
+// Rækkefølgen: DOMÆNE (forælder) -> LABEL (barn) -> NAVN.
+// Et klik på domænet slukker alt i det. Et klik på labelen slukker kun den.
+// toggleLabel: DNA 2026-10-02 — tænder/slukker HELE FAMILIEN.
+// Dobbeltklik på en overskrift (eller Alt-knappen) slukker agenten OG alle
+// dens børn på ét tryk — som når man klikker et domæne i sidebar'en.
+// Det gælder ALLE labels i ALLE domæner (Opgaver, podcast, juridiske
+// sager …), så man ikke skal trykke hundrede knapper.
+function toggleLabel(key, el) {
+  const alle = (dataAll.nodes || []);
+  const børn = alle.filter(n => labelKey(n) === key && n.arbejde === '1');
+  const familieTændt = !hiddenLabels.has(key)
+    && børn.every(n => visteDele.has(key + '\u0001' + (n.del || '')));
+  if (familieTændt) {
+    hiddenLabels.add(key);
+    børn.forEach(n => visteDele.delete(key + '\u0001' + (n.del || '')));
+  } else {
+    hiddenLabels.delete(key);
+    børn.forEach(n => visteDele.add(key + '\u0001' + (n.del || '')));
+  }
+  savePrefs(); applyHidden(); renderLegend(); initNetwork();
+}
+
+function labelKey(n) { return n.group + '\u0000' + (n.age || ''); }
+
+// toggleAfsnit: DNA 2026-10-02 — dobbeltklik på en AFSNITS-OVERSKRIFT i
+// labels (fx 'Juridiske sager', 'Opgaver', 'Agenter', 'podcast').
+// Tænder/slukker for ALLE labels i den kategori på ét tryk, så man
+// kan styre en hel kategori af gangen. Derefter tænder man enkeltvis.
+function toggleAfsnit(g, el) {
+  const alle = (dataAll.nodes || []);
+  const keys = [...new Set(alle.filter(n => n.group === g).map(n => labelKey(n)))];
+  const alleTændt = keys.length > 0 && keys.every(k => !hiddenLabels.has(k));
+  if (alleTændt) {
+    keys.forEach(k => {
+      hiddenLabels.add(k);
+      // sluk også kategorien børn
+      alle.filter(n => labelKey(n) === k && n.arbejde === '1')
+          .forEach(n => visteDele.delete(k + '\u0001' + (n.del || '')));
+    });
+  } else {
+    keys.forEach(k => hiddenLabels.delete(k));
+  }
+  savePrefs(); applyHidden(); renderLegend(); initNetwork();
+}
+
+// toggleDel: DNA 2026-10-02 — dobbeltklik på et BARN under en agent.
+//
+// dine eksempel: inde i Agent One, dobbeltklik på 'noter' -> KUN hans
+// noter bliver aktive. Dobbeltklik på 'Efterforskning' -> kun den.
+// Derfor er børnene EKSKLUSIVE: når man tænder et barn, slukkes
+// søskendene. Dobbeltklik igen på samme barn -> det slukkes (kun
+// agenten tilbage). Forælderen tændes automatisk, så barnet kan ses.
+function toggleDel(par, el) {
+  const pkey = labelKey({ group: par[0], age: par[1] });
+  const dkey = pkey + '\u0001' + par[2];
+  const alle = (dataAll.nodes || []);
+  const søskende = [...new Set(alle
+    .filter(n => labelKey(n) === pkey && n.arbejde === '1')
+    .map(n => pkey + '\u0001' + (n.del || '')))];
+
+  if (visteDele.has(dkey)) {
+    visteDele.delete(dkey);                 // sluk barnet
+  } else {
+    søskende.forEach(k => {                // sluk alle søskende
+      if (k !== dkey) visteDele.delete(k);
+    });
+    visteDele.add(dkey);                    // tænd KUN dette barn
+    hiddenLabels.delete(pkey);              // forælderen skal være tændt
+  }
+  const on = visteDele.has(dkey);
+  el.classList.toggle('on', on);
+  el.classList.toggle('off', !on);
+  const k = el.querySelector('.legend-knap');
+  if (k) k.textContent = on ? '●' : '○';
+  savePrefs(); applyHidden(); renderLegend(); initNetwork();
+}
+
+// ===== ALT-eller-INTET pr. afsnit  =====
+// Ud for hvert afsnit i sidebar'en — "Domæne" og "Labels" — står en knap
+// der tænder eller slukker for HELE afsnittet på ét klik. Er noget tændt,
+// står der "Skjul alle"; er alt slukket, står der "Vis alle".
+// Bagefter kan man tænde dem en ad gangen med ●/○ ud for hver linje.
+function altDom() {
+  const grupper = [...new Set((dataAll.nodes || []).map(n => n.group))];
+  const altSlukket = grupper.length > 0 && grupper.every(g => hiddenGroups.has(g));
+  if (altSlukket) {
+    grupper.forEach(g => hiddenGroups.delete(g));
+  } else {
+    grupper.forEach(g => hiddenGroups.add(g));
+  }
+  savePrefs(); applyHidden(); renderLegend(); initNetwork();
+}
+
+function altLab() {
+  const alle = (dataAll.nodes || []).map(n => labelKey(n));
+  const unikke = [...new Set(alle)];
+  const altSlukket = unikke.length > 0 && unikke.every(k => hiddenLabels.has(k));
+  if (altSlukket) {
+    unikke.forEach(k => hiddenLabels.delete(k));
+  } else {
+    unikke.forEach(k => hiddenLabels.add(k));
+  }
+  savePrefs(); applyHidden(); renderLegend(); initNetwork();
+}
+
+// Tænd/sluk for HELE FAMILIEN: agenten og ALLE dens børn .
+// Bruges af Alt-knappen ud for hver agents overskrift. Dobbeltklik på
+// agentnavnet gør det samme (via dblKlik -> toggleLabel -> her).
+function altEnLabel(key, el) {
+  const alle = (dataAll.nodes || []);
+  const tilhører = alle.filter(n => labelKey(n) === key);
+  const børn = alle.filter(n => labelKey(n) === key && n.arbejde === '1');
+  const familieTændt = tilhører.length > 0
+    && !hiddenLabels.has(key)
+    && børn.every(n => visteDele.has(key + '\u0001' + (n.del || '')));
+  if (familieTændt) {
+    // Sluk hele familien: agenten OG alle dens børn
+    hiddenLabels.add(key);
+    børn.forEach(n => visteDele.delete(key + '\u0001' + (n.del || '')));
+  } else {
+    // Tænd hele familien: agenten OG alle dens børn
+    hiddenLabels.delete(key);
+    børn.forEach(n => visteDele.add(key + '\u0001' + (n.del || '')));
+  }
+  savePrefs(); applyHidden(); renderLegend(); initNetwork();
+}
+
+// Holder den ENE Alt-knaps tekst i sync (Domæne og Labels).
+function opdaterAltKnapper() {
+  const grupper = [...new Set((dataAll.nodes || []).map(n => n.group))];
+  const dom = document.getElementById('alt-dom');
+  if (dom) {
+    const altSlukket = grupper.length > 0 && grupper.every(g => hiddenGroups.has(g));
+    dom.textContent = altSlukket ? 'Vis alle' : 'Skjul alle';
+  }
+  const lab = document.getElementById('alt-lab');
+  if (lab) {
+    const unikke = [...new Set((dataAll.nodes || []).map(n => labelKey(n)))];
+    const altSlukket = unikke.length > 0 && unikke.every(k => hiddenLabels.has(k));
+    lab.textContent = altSlukket ? 'Vis alle' : 'Skjul alle';
+  }
+}
+
+// visteDele: hvilke af agenternes TING (børn) er tændt i grafen?
+// DNA 2026-10-02: børnene er skjult som standard. Man tænder dem enkeltvis
+// nede under agenten i sidebar'en. Dobbeltklik på agenten tænder/slukker
+// hele familien (agenten + alle dens børn).
+let visteDele = new Set();
+
+// ===== DNA 2026-10-02: tre funktioner i sidebjælken =====
+//   PEG på et domæne/label  -> alt der hører til LYSER i grafen (midlertidigt)
+//   KLIK een gang            -> lyset HOLDER FAST, så man kan zoome rundt
+//   DOBBELTKLIK              -> TÆNDER/SLUKKER (som enkeltklik gjorde før)
+//
+// Fremhævningen sker ved at DÆMPE alt andet — ikke ved at fjerne det —
+// så man kan zoome ud og se helheden mens udvalget står klart.
+let fastlåst = null;   // {type:'gruppe'|'label', værdi:'...'} eller null
+let hoverAktiv = null;
+// labelListe[i] = [gruppe, label] — labels læses herfra, ikke fra HTML,
+// fordi NUL-tegnet i nøglen ikke overlever et HTML-attribut .
+let labelListe = [];
+// labelOverskrifter[i] = label-nøglen (gruppe + NUL + label) for hver overskrift
+let labelOverskrifter = [];
+// afsnitListe[i] = gruppenavnet for hver AFSNITS-overskrift i labels
+// ('Agenter', 'Opgaver', 'Juridiske sager' …) — DNA 2026-10-02
+let afsnitListe = [];
+
+// Hvilke noder hører til et emne? Gruppe, afsnit, label eller barn.
+function _emneNoder(type, værdi) {
+  const alle = (dataAll && dataAll.nodes) || [];
+  if (type === 'gruppe') return alle.filter(n => n.group === værdi);
+  if (type === 'afsnit') return alle.filter(n => n.group === værdi);
+  if (type === 'del') {
+    const [g, a, d] = værdi;
+    return alle.filter(n => n.group === g && (n.age || '?') === a && n.del === d);
+  }
+  const dele = String(værdi).split('\u0000');
+  const g = dele[0], a = dele[1];
+  return alle.filter(n => n.group === g && (n.age || '?') === a);
+}
+
+function _fremhæv(type, værdi) {
+  if (!network || !window.gnet) return;
+  if (type === 'kant') {
+    // DNA 2026-10-16: peg/klik på en KANTTYPE lyser netop de kanter op i
+    // grafen, så man kan se hvem der er bundet til hvem. Samme princip som
+    // domæner/labels, bare på kanter i stedet for noder.
+    const ramte = new Set((dataAll.edges || [])
+      .filter(e => (e.label || '?') === værdi).map(e => String(e.id)));
+    if (!ramte.size) return;
+    const alleNoder = gnet.body.data.nodes.get({ returnType: 'Array' });
+    gnet.body.data.nodes.update(alleNoder.map(n => ({ id: n.id, opacity: 0.15 })));
+    const alleKanter = gnet.body.data.edges.get({ returnType: 'Array' });
+    gnet.body.data.edges.update(alleKanter.map(e => ramte.has(String(e.id))
+      ? { id: e.id, color: { color: '#7fd4ff', opacity: 1 }, width: 3 }
+      : { id: e.id, color: { color: '#24507a', opacity: 0.06 }, width: 1 }));
+    return;
+  }
+  const ramte = new Set(_emneNoder(type, værdi).map(n => String(n.id)));
+  if (!ramte.size) return;
+  const alleNoder = gnet.body.data.nodes.get({ returnType: 'Array' });
+  gnet.body.data.nodes.update(alleNoder.map(n => ({
+    id: n.id, opacity: ramte.has(String(n.id)) ? 1 : 0.12
+  })));
+  const alleKanter = gnet.body.data.edges.get({ returnType: 'Array' });
+  gnet.body.data.edges.update(alleKanter.map(e => {
+    const inde = ramte.has(String(e.from)) && ramte.has(String(e.to));
+    return inde
+      ? { id: e.id, color: { color: '#7fd4ff', opacity: 1 }, width: 2 }
+      : { id: e.id, color: { color: '#24507a', opacity: 0.08 }, width: 1 };
+  }));
+}
+
+function _rydFremhævning() {
+  if (!network || !window.gnet) return;
+  const alleNoder = gnet.body.data.nodes.get({ returnType: 'Array' });
+  gnet.body.data.nodes.update(alleNoder.map(n => ({ id: n.id, opacity: 1 })));
+  const alleKanter = gnet.body.data.edges.get({ returnType: 'Array' });
+  gnet.body.data.edges.update(alleKanter.map(e => ({
+    id: e.id, color: { color: '#24507a' }, width: 1
+  })));
+}
+
+function pegPå(type, værdi, el) {
+  if (fastlåst) return;             // intet hover mens noget er låst
+  document.querySelectorAll('.legend-item.hover').forEach(x => x.classList.remove('hover'));
+  if (el) el.classList.add('hover');
+  hoverAktiv = { type, værdi };
+  _fremhæv(type, værdi);
+}
+
+function pegVæk() {
+  if (fastlåst) return;
+  document.querySelectorAll('.legend-item.hover').forEach(x => x.classList.remove('hover'));
+  hoverAktiv = null;
+  _rydFremhævning();
+}
+
+function klikPå(type, værdi, el) {
+  const samme = fastlåst && fastlåst.type === type && fastlåst.værdi === værdi;
+  document.querySelectorAll('.legend-item.pinned').forEach(x => x.classList.remove('pinned'));
+  if (samme) {                        // klik igen = slip
+    fastlåst = null;
+    sætStatus('Fremhævning sluppet');
+    _rydFremhævning();
+    return;
+  }
+  fastlåst = { type, værdi };
+  if (el) el.classList.add('pinned');
+  _fremhæv(type, værdi);
+  const antal = type === 'kant'
+    ? (dataAll.edges || []).filter(e => (e.label || '?') === værdi).length
+    : _emneNoder(type, værdi).length;
+  sætStatus('Holder fast: ' + antal + (type === 'kant' ? ' kanter' : ' noder') + ' — zoom frit rundt');
+}
+
+function dblKlik(type, værdi, el) {
+  // dobbeltklik = tænd/sluk. Ryd fremhævning så man ser resultatet.
+  fastlåst = null;
+  document.querySelectorAll('.legend-item.pinned').forEach(x => x.classList.remove('pinned'));
+  _rydFremhævning();
+  if (type === 'gruppe') toggleGroup(værdi, el);
+  else if (type === 'afsnit') toggleAfsnit(værdi, el);
+  else if (type === 'del') toggleDel(værdi, el);
+  else if (type === 'kant') toggleKantType(værdi, el);
+  else toggleLabel(værdi, el);
+}
+
+function bindLegend(el, type, værdi) {
+  // Et dobbeltklik udløser også to 'click' — derfor venter vi et kort
+  // øjeblik før klik-handlingen, og aflyser den hvis dobbeltklikket kommer.
+  let klikTimer = null;
+  el.addEventListener('mouseenter', () => pegPå(type, værdi, el));
+  el.addEventListener('mouseleave', () => pegVæk());
+  el.addEventListener('click', () => {
+    window.clearTimeout(klikTimer);
+    klikTimer = window.setTimeout(() => klikPå(type, værdi, el), 220);
+  });
+  el.addEventListener('dblclick', (ev) => {
+    ev.preventDefault();
+    window.clearTimeout(klikTimer);   // aflys det ventende enkeltklik
+    dblKlik(type, værdi, el);
+  });
+  // DNA 2026-10-02: INGEN tænd/sluk-knap pr. linje. ●/○ er ren INDIKATOR
+  // for tilstanden. Alt styres med de TRE funktioner: peg, enkeltklik,
+  // dobbeltklik — præcis som oppe i domænerne.
+}
+
+function renderLegend() {
+  // Domæner = forældrene (grupperet på domene)
+  const groups = [...new Set((dataAll.nodes||[]).map(n => n.group))].sort();
+  // Labels = børnene, grupperet under hvert sit domæne
+  const born = {};
+  // born3[gruppe][label][del] = antal — labelens underopdeling
+  const born3 = {};
+  (dataAll.nodes||[]).forEach(n => {
+    const g = n.group || '?';
+    // DNA 2026-10-02: noder UDEN age (fx hele Efterforsknings-grafen fra
+    // Flowsint) har ingen forælder/barn-struktur. De må IKKE havne i
+    // label-listen — ellers kunne "skjul alle labels" skjule hele grafen
+    // (den fejl kostede en undersøgelse).
+    if (!n.age) return;
+    const a = n.age;
+    (born[g] = born[g] || {})[a] = (born[g][a] || 0) + 1;
+    const dl = n.del || null;
+    if (dl) {
+      ((born3[g] = born3[g] || {})[a] = born3[g][a] || {})[dl] =
+        (born3[g][a][dl] || 0) + 1;
+    }
+  });
+  const domHtml = groups.map((g, i) => {
+    const on = !hiddenGroups.has(g);
+    const cnt = groupCounts[g] || '';
+    return '<div class="legend-item legend-dom ' + (on?'on':'off') + '" data-dom="'+i+'" data-g="'+g+'">' +
+      '<span class="status"></span>' +
+      '<span class="dot" style="background:'+colorFor(g)+'"></span>' +
+      '<span class="legend-navn">' + g + '</span><span class="legend-count">'+cnt+'</span>' +
+      '</div>';
+  }).join('');
+
+  let labHtml = '';
+  // DNA 2026-10-02 (ryddet): LABELS bruger PRÆCIS de samme tre funktioner
+  // som domænerne — peg (lys op), enkeltklik (hold fast), dobbeltklik
+  // (tænd/sluk). INGEN knapper pr. linje — ●/○ er ren indikator.
+  // Kun de TO Alt-knapper i afsnitsoverskrifterne findes (Domæne + Labels).
+  //
+  // Trappestigen: agent (label) -> agentens ting (børn).
+  //   dobbeltklik på AGENTEN     -> hele familien tændt/slukket
+  //   dobbeltklik på et BARN     -> kun det barn tændt/slukket
+  labelListe = [];
+  labelOverskrifter = [];
+  afsnitListe = [];
+  groups.forEach(g => {
+    const kids = Object.keys(born[g] || {}).sort();
+    if (!kids.length) return;
+    // DNA 2026-10-02: AFSNITS-OVERSKRIFTEN er klikbar med de TRE funktioner.
+    //   peg          -> lyser hele kategorien op i grafen
+    //   enkeltklik   -> holder den fast
+    //   dobbeltklik  -> tænder/slukker for ALLE labels i kategorien
+    // (fx 'Juridiske sager' -> alt under den slukkes på ét tryk)
+    const aidx = afsnitListe.length;
+    afsnitListe.push(g);
+    const katKeys = kids.map(a => labelKey({ group: g, age: a }));
+    const alleKatTændt = katKeys.length > 0 && katKeys.every(k => !hiddenLabels.has(k));
+    labHtml += '<div class="legend-child-of ' + (alleKatTændt ? 'on' : 'off') + '" data-afsnit="' + aidx + '">' +
+      '<span class="status"></span>' +
+      '<span class="legend-navn">' + g + '</span>' +
+      '<span class="legend-count">' + Object.values(born[g]).reduce((a,b)=>a+b,0) + '</span>' +
+      '</div>';
+    kids.forEach(a => {
+      const key = labelKey({ group: g, age: a });
+      const on = !hiddenLabels.has(key);
+      const oidx = labelOverskrifter.length;
+      labelOverskrifter.push(key);
+      labHtml += '<div class="legend-item legend-lab-head ' + (on?'on':'off') + '" ' +
+        'data-labhead="' + oidx + '">' +
+        '<span class="status"></span>' +
+        '<span class="dot" style="background:'+colorFor(g)+'"></span>' +
+        '<span class="legend-navn">' + a + '</span>' +
+        '<span class="legend-count">' + born[g][a] + '</span>' +
+        '</div>';
+      // === BØRNENE under agenten (dens ting) ===
+      const dele = (born3[g] || {})[a];
+      if (dele) {
+        Object.keys(dele).sort().forEach(d => {
+          const dkey = key + '\u0001' + d;
+          const don = visteDele.has(dkey);
+          const didx = labelListe.length;
+          labelListe.push([g, a, d]);
+          labHtml += '<div class="legend-item legend-del ' + (don?'on':'off') + '" ' +
+            'data-lab="' + didx + '">' +
+            '<span class="status"></span>' +
+            '<span class="dot" style="background:'+colorFor(g)+';opacity:.45"></span>' +
+            '<span class="legend-navn">' + d + '</span>' +
+            '<span class="legend-count">' + dele[d] + '</span>' +
+            '</div>';
+        });
+      }
+    });
+  });
+
+  // ===== KANTTYPER (DNA 2026-10-16) =====
+  // Ligesom domæner, men for kanter: hver kanttype kan tændes/slukkes hver for
+  // sig. Så man fx kan sige "hvem har snakket med hvem" og kun se KENDER.
+  const kantTal = {};
+  (dataAll.edges || []).forEach(e => {
+    const t = e.label || '?';
+    kantTal[t] = (kantTal[t] || 0) + 1;
+  });
+  const kantNavne = Object.keys(kantTal).sort();
+  let kantHtml = '<div class="lbl lbl-lab">Kanter — dobbeltklik: tænd/sluk en kanttype</div>';
+  kantNavne.forEach(t => {
+    const on = !hiddenEdgeTypes.has(t);
+    kantHtml += '<div class="legend-item legend-kant ' + (on ? 'on' : 'off') + '" data-kant="' + t + '">' +
+      '<span class="status"></span>' +
+      '<span class="legend-knap">' + (on ? '●' : '○') + '</span>' +
+      '<span class="legend-navn">' + t + '</span>' +
+      '<span class="legend-count">' + kantTal[t] + '</span></div>';
+  });
+
+  document.getElementById('legend').innerHTML =
+    '<div class="lbl lbl-dom">Domæne — peg: lys op · klik: hold fast · <b>●/○: tænd/sluk</b>' +
+    ' <button class="alt-knap" id="alt-dom" onclick="altDom()">Skjul alle</button></div>' + domHtml +
+    '<div class="legend-rule"></div>' +
+    '<div class="lbl lbl-lab">Labels — børn under domænet. Under hver agent' +
+    ' ligger dens ting (○ = skjult, ● = vist i grafen)' +
+    ' <button class="alt-knap" id="alt-lab" onclick="altLab()">Skjul alle</button></div>' + labHtml +
+    '<div class="legend-rule"></div>' + kantHtml;
+  opdaterAltKnapper();
+
+  // Bind KANTTYPERNE (DNA 2026-10-16): præcis som domæner/labels —
+  // peg (lys op), enkeltklik (hold fast), dobbeltklik (tænd/sluk).
+  document.querySelectorAll('#legend .legend-kant').forEach(el => {
+    const t = el.dataset.kant;
+    if (t == null) return;
+    bindLegend(el, 'kant', t);
+  });
+
+  // Bind de tre funktioner (peg / klik / dobbeltklik) efter HTML er sat.
+  const domEls = document.querySelectorAll('#legend .legend-dom');
+  domEls.forEach(el => bindLegend(el, 'gruppe', el.dataset.g));
+  // Label-overskrifter: hover/klik virker på hele labelen; Alt-knappen
+  // tænder/slukker for labelen og alle dens dele på ét klik.
+  // Label-overskrifter og børn bruger SAMME tre funktioner som domænerne:
+  // peg / enkeltklik / dobbeltklik. Ingen knapper pr. linje.
+  document.querySelectorAll('#legend .legend-lab-head').forEach(el => {
+    const key = labelOverskrifter[Number(el.dataset.labhead)];
+    if (!key) return;
+    bindLegend(el, 'label', key);
+  });
+  document.querySelectorAll('#legend .legend-del').forEach(el => {
+    const par = labelListe[Number(el.dataset.lab)];
+    if (!par) return;
+    bindLegend(el, 'del', par);
+  });
+  // AFSNITS-OVERSKRIFTERNE i labels : 'rod', 'Agenter',
+  // 'Boxstation-tidslinje', 'Juridiske sager', 'Opgaver', 'podcast' …
+  // Samme tre funktioner: peg / enkeltklik / dobbeltklik (tænd-sluk alt).
+  document.querySelectorAll('#legend .legend-child-of').forEach(el => {
+    const g = afsnitListe[Number(el.dataset.afsnit)];
+    if (!g) return;
+    bindLegend(el, 'afsnit', g);
+  });
+}
+
+async function showSelected(n) {
+  // DNA 2026-10-13: husk hvilken node man stod på — så en opdatering fører
+  // tilbage til samme sted i samme visning.
+  try { localStorage.setItem('viewer_sidste', JSON.stringify({ ds: aktivDS, id: String(n.id) })); } catch (e) {}
+  // ===== Metadata-boks (venstre) =====
+  const name = document.getElementById('meta-name');
+  if (name) name.innerHTML = '<b>' + (n.label || '?') + '</b>';
+  setEl('meta-type', n.group || '?');
+  setEl('meta-rolle', n.role || '—');
+  const props = (n.props && typeof n.props === 'object') ? n.props : {};
+  // Tidsstempel + dato/dag — afhænger af nøgler i props
+  let ts = props.timestamp || props.created_at || props.createdAt || '';
+  setEl('meta-timestamp', ts ? formatTs(ts) : '—');
+  const dato = props.dato || props.år || '';
+  const dag = props.dag || '';
+  setEl('meta-dato', [dato, dag ? ('dag ' + dag) : ''].filter(Boolean).join(' · ') || '—');
+
+  // Øvrige metadata (alt uden for indhold-felterne)
+  const contentKeys = ['indhold','content','body','tekst','besked','message','resume','note'];
+  const extra = document.getElementById('meta-extra');
+  let extraHtml = '';
+  Object.keys(props).sort().forEach(k => {
+    if (['rolle','timestamp','created_at','createdAt','dato','år','dag','indhold','content','body','tekst','besked','message','resume','note'].includes(k)) return;
+    const v = props[k];
+    if (v === null || v === undefined || v === '') return;
+    extraHtml += '<div class="meta-row"><div class="k">' + k + '</div><div>' + String(v).slice(0, 200) + '</div></div>';
+  });
+  if (extra) extra.innerHTML = extraHtml;
+
+  // ===== Indhold (højre, rulle) =====
+  // FANER GRUPPERES PÅ KATEGORI (dine ordre 2026-09-29):
+  // Felter navngives <kategori>_<felt> (fx kontakt_email, navn_fornavn).
+  // Kategorien bliver ÉT faneblad - ikke ét faneblad pr. felt.
+  // Gamle flade felter (uden "_") samles i "øvrige" + fane pr. tekst-felt.
+  const tabs = document.getElementById('bottom-tabs');
+  const scroll = document.getElementById('bottom-scroll');
+  if (tabs) tabs.innerHTML = '';
+  if (scroll) scroll.textContent = '';
+
+  // De faste kategorier (rækkefølgen styrer fanebladenes rækkefølge)
+  const KATEGORIER = ['navn','identitet','beskrivelse','kontakt','socialt','personligt',
+                      'viden','arbejde','registrering','relation','direktion','meta'];
+  const META_SKJUL = ['rolle','timestamp','created_at','createdAt','dato','år','dag'];
+
+  // ===== MOC-NODER: fire FASTE faneblade  =====
+  // "Alle noder der har noget med MOC at gøre skal have fire faneblade:
+  //  direktion, noter, forbundet og oversigt." Forbundet bygges nedenfor.
+  const erMoc = (n.group === 'MOC') || String(props.domene || '') === 'MOC';
+
+  if (erMoc) {
+    const mocTabs = [];
+
+    // 1) DIREKTION — hvor man går videre hen
+    const dirFelter = Object.keys(props)
+      .filter(k => k.startsWith('direktion_'))
+      .sort()
+      .map(k => ({ navn: k.slice('direktion_'.length), værdi: String(props[k] || '') }));
+    let dirTxt = '';
+    if (dirFelter.length) {
+      dirFelter.forEach(f => { dirTxt += f.navn + ': ' + (f.værdi || '(ingen)') + '\n'; });
+      mocTabs.push({
+        key: 'direktion (' + dirFelter.filter(f => f.værdi).length + '/' + dirFelter.length + ')',
+        text: dirTxt
+      });
+    } else {
+      mocTabs.push({ key: 'direktion (0)', text: 'Ingen direktioner registreret på denne node.\n' +
+        'En direktion er en henvisning: hvor finder man mere om dette emne?\n' });
+    }
+
+    // 2) NOTER — nodens egen tekst
+    const noteFelter = ['note', 'tekst', 'referat', 'resume', 'indhold', 'besked']
+      .filter(k => props[k] && String(props[k]).trim());
+    let noteTxt = '';
+    noteFelter.forEach(k => { noteTxt += '[' + k + ']\n' + String(props[k]).trim() + '\n\n'; });
+    if (!noteTxt) {
+      // fald tilbage til de beskrivende felter
+      Object.keys(props).sort().forEach(k => {
+        if (k.startsWith('beskrivelse_') && props[k] && String(props[k]).trim()) {
+          noteTxt += k.slice('beskrivelse_'.length) + ': ' + String(props[k]).trim() + '\n';
+        }
+      });
+    }
+    mocTabs.push({ key: 'noter (' + (noteTxt ? noteTxt.length : 0) + ')',
+                   text: noteTxt || '(ingen note på denne node)' });
+
+    // 3) OVERSIGT (emnetræer) — hvad der ligger UNDER noden
+    // hentes async nedenfor; her lægges pladsholderen ind i rigtig rækkefølge
+    mocTabs.push({ key: 'oversigt', text: '(henter...)' });
+
+    // byg fanerne
+    let aktiv = mocTabs[0].key;
+    mocTabs.forEach((t, i) => {
+      const b = document.createElement('div');
+      b.className = 'btab' + (i === 0 ? ' active' : '');
+      b.textContent = t.key;
+      b.onclick = () => {
+        aktiv = t.key;
+        for (let k = 0; k < tabs.children.length; k++) tabs.children[k].classList.toggle('active', k === i);
+        scroll.textContent = mocTabs[i].text;
+      };
+      tabs.appendChild(b);
+    });
+    scroll.textContent = mocTabs[0].text;
+
+    // fyld oversigt-fanen med børnene. I OPS slås op lokalt (ids er filstier).
+    try {
+      let nb = null;
+      if (aktivHjerne === 'OPS') {
+        nb = naboerLokalt(n);
+      } else {
+        const res = await fetch('api/neighbors?id=' + encodeURIComponent(n.id));
+        nb = await res.json();
+      }
+      let ovTxt = '';
+      if (nb && nb.match && nb.nodes && nb.nodes.length > 1) {
+        const center = String(n.id);
+        const børn = nb.nodes.filter(x => String(x.id) !== center);
+        const grupper = {};
+        børn.forEach(c => {
+          const rels = (nb.edges || [])
+            .filter(e => (String(e.from) === center && String(e.to) === String(c.id)) ||
+                         (String(e.to) === center && String(e.from) === String(c.id)))
+            .map(e => e.label);
+          const rel = rels.length ? rels[0] : '?';
+          (grupper[rel] = grupper[rel] || []).push(c);
+        });
+        ovTxt = 'Under "' + (n.label || '?') + '" (' + børn.length + '):\n\n';
+        Object.keys(grupper).sort().forEach(rel => {
+          ovTxt += '— ' + rel + ' (' + grupper[rel].length + ') —\n';
+          grupper[rel].sort((a, b) => String(a.label).localeCompare(String(b.label), 'da'))
+            .forEach(c => { ovTxt += '   ' + (c.label || c.id) + '\n'; });
+          ovTxt += '\n';
+        });
+      } else {
+        ovTxt = '(ingen emner under denne node)';
+      }
+      const idx = mocTabs.findIndex(t => t.key === 'oversigt');
+      if (idx >= 0) {
+        mocTabs[idx].text = ovTxt;
+        if (tabs.children[idx] && tabs.children[idx].classList.contains('active')) {
+          scroll.textContent = ovTxt;
+        }
+      }
+    } catch (e) {
+      console.error('oversigt-fejl:', e && e.message ? e.message : e);
+      /* oversigt er en hjælpefane */
+    }
+
+  } else {
+
+  const katIndhold = {};     // kategori -> [{navn, værdi}]
+  const tekstFaner = [];     // fane pr. frit tekstfelt
+  const fladeIndhold = {};   // DNA 2026-10-16: flade felter -> navngivne faner
+  const øvrige = [];        // resterende flade felter uden kategori
+
+  // DNA 2026-10-16: flade felter (uden kategori-præfiks) skal også have
+  // ordentlige faneblade — ikke klumpes i "øvrige". Konklusion/Emne-noder har
+  // fx bevis/niveau/emne/observer der hører sammen, og kategori/domene/type
+  // der beskriver tilhørsforholdet.
+  const FLADE = {
+    'bevis': 'egenskaber', 'niveau': 'egenskaber', 'emne': 'egenskaber', 'observer': 'egenskaber',
+    'kategori': 'tilhørsforhold', 'domene': 'tilhørsforhold', 'type': 'tilhørsforhold',
+    'slags': 'tilhørsforhold', 'entitet': 'tilhørsforhold',
+    'sti': 'oprindelse', 'kilde': 'oprindelse', 'oprindelse': 'oprindelse',
+    'gammel_id': 'oprindelse', 'fra_gammel_graf': 'oprindelse',
+  };
+
+  Object.keys(props).forEach(k => {
+    const v = props[k];
+    const tom = (v === null || v === undefined || String(v).trim() === '');
+    // frit tekstfelt (indhold/tekst/besked) bliver sin egen fane
+    if (contentKeys.includes(k)) {
+      if (!tom) tekstFaner.push({ key: k, text: String(v).trim() });
+      return;
+    }
+    if (META_SKJUL.includes(k)) return;
+    const i = k.indexOf('_');
+    const kat = i > 0 ? k.slice(0, i) : null;
+    if (kat && KATEGORIER.includes(kat)) {
+      if (!katIndhold[kat]) katIndhold[kat] = [];
+      katIndhold[kat].push({ navn: k.slice(i + 1), værdi: tom ? '' : String(v) });
+      return;
+    }
+    if (tom) return;
+    const fladeFane = FLADE[k];
+    if (fladeFane) {
+      if (!fladeIndhold[fladeFane]) fladeIndhold[fladeFane] = [];
+      fladeIndhold[fladeFane].push({ navn: k, værdi: String(v) });
+    } else {
+      øvrige.push({ navn: k, værdi: String(v) });
+    }
+  });
+
+  // byg faneliste: kategori-faner først, så tekst-faner, så flade faner, så øvrige
+  const allTabs = [];
+  KATEGORIER.forEach(kat => {
+    const felter = katIndhold[kat];
+    if (!felter || !felter.length) return;
+    felter.sort((a, b) => a.navn.localeCompare(b.navn, 'da'));
+    const udfyldt = felter.filter(f => f.værdi).length;
+    let txt = '';
+    felter.forEach(f => {
+      txt += f.navn + ': ' + (f.værdi || '(mangler oplysning)') + '\n';
+    });
+    allTabs.push({ key: kat + ' (' + udfyldt + '/' + felter.length + ')', text: txt });
+  });
+  tekstFaner.forEach(t => allTabs.push({ key: t.key + ' (' + t.text.length + ')', text: t.text }));
+  // flade faner i fast rækkefølge (DNA 2026-10-16)
+  ['egenskaber', 'tilhørsforhold', 'oprindelse'].forEach(fane => {
+    const felter = fladeIndhold[fane];
+    if (!felter || !felter.length) return;
+    felter.sort((a, b) => a.navn.localeCompare(b.navn, 'da'));
+    let txt = '';
+    felter.forEach(f => { txt += f.navn + ': ' + f.værdi + '\n'; });
+    allTabs.push({ key: fane + ' (' + felter.length + ')', text: txt });
+  });
+  if (øvrige.length) {
+    let txt = '';
+    øvrige.forEach(f => { txt += f.navn + ': ' + f.værdi + '\n'; });
+    allTabs.push({ key: 'øvrige (' + øvrige.length + ')', text: txt });
+  }
+
+  if (!allTabs.length) {
+    if (scroll) scroll.textContent = '(denne node har ingen registreret indhold) ' + (n.label || '');
+    return;
+  }
+  let activeKey = allTabs[0].key;
+  allTabs.forEach((t, i) => {
+    const b = document.createElement('div');
+    b.className = 'btab' + (i === 0 ? ' active' : '');
+    b.textContent = t.key;
+    b.onclick = () => {
+      activeKey = t.key;
+      for (let k = 0; k < tabs.children.length; k++) tabs.children[k].classList.toggle('active', k === i);
+      scroll.textContent = allTabs[i].text;
+    };
+    tabs.appendChild(b);
+  });
+  scroll.textContent = allTabs[0].text;
+
+  }  // slut på MOC/normal-greningen
+
+  // ===== NODENS STED OG STRUKTUR — SAMME FANEBLADE PÅ ALLE NODER =====
+  // DNA 2026-10-13: alle noder skal have samme opbygning, så vi får lige meget
+  // ud af dem. Tre faste faneblade først:
+  //   ① sti     — hvor noden ligger (til at dirigere AI'en hen til placeringen)
+  //   ② mapper  — hvilke mapper der ligger under den (klikbare: gå ind i dem)
+  //   ③ MD      — hvilke MD-filer der ligger under den (klikbare: læs dem)
+  // Træet vokser med tiden, så fanebladene viser hvad der ER — ikke hvad der
+  // var. Klik på en mappe -> ind i den. Klik på en MD -> noten læses nedunder.
+  {
+    const aabnPanel = () => {
+      const panel = document.getElementById('bottom-panel');
+      if (!panel) return;
+      panel.classList.remove('closed');
+      const h = parseInt(panel.style.height || '0', 10);
+      if (!h || h < 160) panel.style.height = '300px';
+    };
+    const mine = [];                 // vore faste faneblade, i rækkefølge
+    const fane = (navn, indhold, valgt) => {
+      const knap = document.createElement('div');
+      knap.className = 'btab';
+      knap.textContent = navn;
+      knap.onclick = () => {
+        Array.prototype.forEach.call(tabs.children, c => c.classList.remove('active'));
+        knap.classList.add('active');
+        scroll.textContent = '';
+        if (typeof indhold === 'string') scroll.textContent = indhold;
+        else scroll.appendChild(indhold);
+      };
+      mine.push(knap);
+      return { navn: navn, knap: knap, valgt: !!valgt };
+    };
+    const erMappeNode = (x) => String((x && x.id) || '').startsWith('__mappe__');
+    const propsAf = (x) => (x && x.props && typeof x.props === 'object') ? x.props : {};
+    const stiFor = (x) => {
+      const pr = propsAf(x);
+      if (String(pr.sti || '').trim()) return String(pr.sti).trim();
+      if (erMappeNode(x)) return String(x.id).replace('__mappe__/', '');
+      const p = pr.sti || pr.path || pr.fil || pr.filnavn || '';
+      return String(p || '').trim();
+    };
+    const mappeStiFor = (x) => erMappeNode(x)
+      ? String(x.id).replace('__mappe__/', '')
+      : String(propsAf(x).mappe || '').trim();
+    const alle = filterFullNodes();
+    const klikbar = (x) => {
+      const rad = document.createElement('div');
+      rad.style.cssText = 'margin:4px 0';
+      const a = document.createElement('a');
+      a.href = '#';
+      a.textContent = (erMappeNode(x) ? '🗂 ' : '📄 ') + (x.label || '?') +
+                      (erMappeNode(x) ? '' : '  (' + (stiFor(x) || '?') + ')');
+      a.style.cssText = 'color:#7dd3fc;text-decoration:underline;cursor:pointer';
+      a.onclick = (ev) => {
+        ev.preventDefault();
+        const mål = filterFullNodes().find(y => String(y.id) === String(x.id));
+        if (mål) {
+          showSelected(mål);
+          if (window.gnet) window.gnet.selectNodes([String(x.id)]);
+        }
+      };
+      rad.appendChild(a);
+      return rad;
+    };
+    const listeAf = (xs, tomTekst, sorter = true) => {
+      const wrap = document.createElement('div');
+      if (!xs.length) { wrap.textContent = tomTekst; return wrap; }
+      const l = sorter ? xs.slice().sort((a, b) => String(a.label).localeCompare(String(b.label), 'da')) : xs;
+      l.forEach(x => wrap.appendChild(klikbar(x)));
+      return wrap;
+    };
+    // hvad ligger DER UNDER denne node?
+    const mappeSti = mappeStiFor(n);
+    let under = [], noterHer = [];
+    if (mappeSti) {
+      under = alle.filter(x => erMappeNode(x) &&
+        String(x.id).replace('__mappe__/', '').split('/').slice(0, -1).join('/') === mappeSti &&
+        String(x.id).replace('__mappe__/', '') !== mappeSti);
+      noterHer = alle.filter(x => !erMappeNode(x) && String(propsAf(x).mappe || '') === mappeSti);
+    }
+    const erMappe = erMappeNode(n);
+    // ① sti — hvor ligger den (til at dirigere AI'en)
+    const sti = stiFor(n);
+    fane('sti', sti
+      ? ('📍 ' + sti + '\n\n' +
+         '— peg her for at dirigere AI\'en til denne placering —\n' +
+         'type:   ' + (erMappe ? 'mappe' : 'MD-fil') + '\n' +
+         'mappe:  ' + (mappeSti || '(roden)') + '\n' +
+         'domæne: ' + (n.group || '?'))
+      : ('(ingen sti registreret på denne node)\n\n' +
+         'node:  ' + (n.label || '?') + '\n' +
+         'type:  ' + (n.group || '?') + '\n' +
+         'domæne: ' + (n.group || '?')), false);
+    // ② mapper — hvad der ligger under den
+    fane('mapper (' + under.length + ')', listeAf(under,
+      erMappe ? '(ingen undermapper her)' : '(denne node er ikke en mappe)'), erMappe);
+    // ③ MD — hvilke MD-filer der ligger under den
+    fane('MD (' + noterHer.length + ')', listeAf(noterHer,
+      erMappe ? '(ingen MD-filer her)' : '(denne node ER selv en MD-fil — se fanebladet note)'), false);
+    // ④ noten selv (kun når noden er en fil)
+    if (!erMappe && String(propsAf(n).sti || '').trim()) {
+      const fil = String(propsAf(n).sti).trim();
+      let tekst;
+      try {
+        const svar = await fetch('/api/note?sti=' + encodeURIComponent(fil));
+        const d = await svar.json();
+        tekst = d.tekst || ('(noten kunne ikke læses: ' + (d.fejl || 'ukendt fejl') + ')');
+      } catch (e) {
+        tekst = '(kunne ikke hente noten: ' + e.message + ')';
+      }
+      fane('note (' + tekst.length + ')', '📄 ' + fil + '\n' + '─'.repeat(40) + '\n\n' + tekst, true);
+    }
+    // sæt de faste faneblade ind FOERST, i den rækkefølge de blev bygget
+    mine.slice().reverse().forEach(k => tabs.insertBefore(k, tabs.firstChild));
+    // aktivér: på en mappe 'mapper', på en fil 'note'
+    const ønsket = erMappe ? 'mapper' : 'note';
+    const valg = mine.find(k => k.textContent.startsWith(ønsket + ' ')) || mine[0];
+    if (valg) valg.onclick();
+    if (erMappe || String(propsAf(n).sti || '').trim()) aabnPanel();
+  }
+
+  // ===== 'Forbundet'-fane: hent naboer (dokumenter, personer, mailbox, sager osv.) =====
+  // dine ordre 2026-09-29: hvert navn skal være KLIKBART og åbne den node.
+  // DNA 2026-08-02: i OPS slås naboer op LOKALT i datasættet (ids er filstier,
+  // ikke AGE-tal), så samme fane virker i begge hjerner.
+  try {
+    let neigh = null;
+    if (aktivHjerne === 'OPS') {
+      neigh = naboerLokalt(n);
+    } else {
+      const res = await fetch('api/neighbors?id=' + encodeURIComponent(n.id));
+      neigh = await res.json();
+    }
+    if (!neigh || !neigh.match || !neigh.nodes || neigh.nodes.length <= 1) {
+      // DNA 2026-10-02: MOC-noder SKAL have fire faneblade — så forbundet
+      // tilføjes også når der ingen naboer er, med en tom besked.
+      if (erMoc) {
+        const b = document.createElement('div');
+        b.className = 'btab';
+        b.textContent = 'forbundet (0)';
+        b.onclick = () => {
+          Array.prototype.forEach.call(tabs.children, c2 => c2.classList.remove('active'));
+          b.classList.add('active');
+          scroll.textContent = '(ingen forbindelser registreret på denne node)';
+        };
+        tabs.appendChild(b);
+      }
+      return;
+    }
+    const center = neigh.nodes[0].id;
+
+    // byg klikbar liste: hvert navn er et link der åbner naboen
+    const wrap = document.createElement('div');
+    const head = document.createElement('div');
+    head.style.cssText = 'color:var(--muted);margin-bottom:8px';
+    head.textContent = '— Forbundet til (' + (neigh.nodeCount - 1) + ') —';
+    wrap.appendChild(head);
+
+    const alleNoder = filterFullNodes();
+
+    neigh.nodes.forEach(nb => {
+      if (String(nb.id) === String(center)) return;
+      const rels = neigh.edges
+        .filter(e => (String(e.from) === String(center) && String(e.to) === String(nb.id)) ||
+                     (String(e.to) === String(center) && String(e.from) === String(nb.id)))
+        .map(e => e.label);
+      const rel = (rels.length ? rels.join(', ') : '?');
+
+      const rad = document.createElement('div');
+      rad.style.cssText = 'margin:4px 0';
+      const relSpan = document.createElement('span');
+      relSpan.style.color = 'var(--muted)';
+      relSpan.textContent = rel + '  →  ';
+      rad.appendChild(relSpan);
+
+      const a = document.createElement('a');
+      a.href = '#';
+      a.textContent = (nb.label || '?') + '  (' + (nb.group || '?') + ')';
+      a.style.cssText = 'color:#7dd3fc;text-decoration:underline;cursor:pointer';
+      a.onclick = (ev) => {
+        ev.preventDefault();
+        // find noden i datasættet og vis den — så man kan klikke videre
+        const mål = alleNoder.find(x => String(x.id) === String(nb.id));
+        if (mål) {
+          showSelected(mål);
+          if (window.gnet) window.gnet.selectNodes([String(nb.id)]);
+        }
+      };
+      rad.appendChild(a);
+      wrap.appendChild(rad);
+    });
+
+    const b = document.createElement('div');
+    b.className = 'btab';
+    b.textContent = 'forbundet (' + (neigh.nodeCount - 1) + ')';
+    b.onclick = () => {
+      Array.prototype.forEach.call(tabs.children, c2 => c2.classList.remove('active'));
+      b.classList.add('active');
+      scroll.textContent = '';
+      scroll.appendChild(wrap);
+    };
+    tabs.appendChild(b);
+  } catch (e) {
+    console.error('forbundet-fejl:', e && e.message ? e.message : e);
+    // forbundet er en hjælpefane — men MOC-noder skal have den alligevel
+    if (erMoc) {
+      const b = document.createElement('div');
+      b.className = 'btab';
+      b.textContent = 'forbundet (0)';
+      b.onclick = () => {
+        Array.prototype.forEach.call(tabs.children, c2 => c2.classList.remove('active'));
+        b.classList.add('active');
+        scroll.textContent = '(kunne ikke hente forbindelser)';
+      };
+      tabs.appendChild(b);
+    }
+  }
+
+  // ===== 'Vektra'-fane (5. fane, DNA 2026-10-03): hvilke vektorer hører til
+  // denne node, og hvilken mappe i Ops de peger på. Bare MOC-noder.
+  // Vektoren er broen mellem boblen i grafen og noterne i Ops.
+  if (erMoc) {
+    let vektTxt = '(henter...)';
+    const b = document.createElement('div');
+    b.className = 'btab';
+    b.textContent = 'vektra (?)';
+    b.onclick = () => {
+      Array.prototype.forEach.call(tabs.children, c2 => c2.classList.remove('active'));
+      b.classList.add('active');
+      scroll.textContent = vektTxt;
+    };
+    tabs.appendChild(b);
+
+    // hent først når nogen klikker — grafen skal ikke vente på det
+    b.addEventListener('click', async function hentEn() {
+      b.removeEventListener('click', hentEn);
+      try {
+        if (aktivHjerne === 'OPS') {
+          vektTxt = '(OPS-visningen har ingen MOC-vektorer — vektorene ligger i AG-hjernen)';
+        } else {
+          const res = await fetch('api/moc_vektorer?navn=' + encodeURIComponent(n.label || ''));
+          const d = await res.json();
+          const vs = (d && d.vektorer) || [];
+          const navn = (d && d.navn) || n.label || '?';
+          if (!vs.length) {
+            vektTxt = 'Navn slået op: ' + navn + '\n\n' +
+              '(ingen vektor knyttet til denne node)\n' +
+              'Uden en vektor kan agenten ikke finde noden ved at søge.\n';
+          } else {
+            const agentB = vs.filter(v => v.type === 'agent-boble');
+            const andre = vs.filter(v => v.type !== 'agent-boble');
+            let t = 'Navn slået op: ' + navn + '   (vektorer: ' + vs.length + ')\n\n';
+            if (agentB.length) {
+              t += 'DENNE NODES EGEN VEKTOR (agent-boble):\n';
+              agentB.forEach(v => {
+                t += '   navn:      ' + v.navn + '\n';
+                t += '   rolle:     ' + (v.uddrag || '').split('\n')[0].slice(0, 200) + '\n';
+                const mb = v.informationscenter || v.mappe;
+                if (mb) t += '   peger på: Obsidian/' + mb + '/\n';
+                if (v.workspace) t += '   workspace: ' + v.workspace + '\n';
+                t += '\n';
+              });
+            }
+            if (andre.length) {
+              t += 'ANDRE VEKTORER MED SAMME NAVN (' + andre.length + '):\n';
+              andre.forEach(v => {
+                t += '   [' + (v.type || '?') + ']' +
+                     (v.domene ? ' domæne=' + v.domene : '') +
+                     (v.sti ? '  -> ' + v.sti : '') + '\n';
+              });
+              t += '\n';
+            }
+            const stier = Array.from(new Set(vs.map(v => v.informationscenter || v.mappe || v.sti).filter(Boolean)));
+            t += 'MAPPER I OPS DER HÆNGER PÅ: ' + (stier.length || 0) + '\n';
+            stier.forEach(s => { t += '   Obsidian/' + s + '\n'; });
+            vektTxt = t;
+          }
+        }
+      } catch (err) {
+        vektTxt = '(kunne ikke hente vektorer: ' + (err && err.message ? err.message : err) + ')';
+      }
+      b.textContent = 'vektra (' + (vs_antal(vektTxt)) + ')';
+      if (b.classList.contains('active')) scroll.textContent = vektTxt;
+    });
+  }
+}
+
+// antal vektorer ud af teksten — holder fanetitlen ærlig også når den er tom
+function vs_antal(t) {
+  if (!t || t.indexOf('(henter') === 0) return '?';
+  const m = /vektorer: (\d+)/.exec(t);
+  if (m) return m[1];
+  if (t.indexOf('ingen vektor') >= 0) return '0';
+  return '?';
+}
+
+function setEl(id, v) { const el = document.getElementById(id); if (el) el.textContent = v; }
+
+function formatTs(ts) {
+  const n = Number(ts);
+  let d;
+  if (ts.length === 10) d = new Date(n * 1000);           // sekunder
+  else if (ts.length === 13) d = new Date(n);              // millisekunder
+  else { d = new Date(isNaN(n) ? 0 : n); }
+  if (isNaN(d.getTime())) return String(ts);
+  return d.toLocaleString('da-DK', { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+function toggleLegendPanel() {
+  const p = document.getElementById('legend-panel');
+  if (!p) return;
+  p.classList.toggle('open');
+  // DNA 2026-10-16: panelet skal ligge UNDER topbaren (topbaren kan wrappe til
+  // flere linjer), og den usynlige bjælke skal følge med ud, så man kan
+  // dobbeltklikke lige uden for panelet for at lukke det igen.
+  const tb = document.getElementById('topbar');
+  const tap = document.getElementById('side-tap');
+  const underTopbar = tb ? (tb.offsetHeight + 2) : 42;
+  p.style.top = underTopbar + 'px';
+  if (tap) {
+    tap.style.top = underTopbar + 'px';
+    // Åben: bjælken rykkes til lige VENSTRE for panelet (panelets bredde).
+    // Lukket: bjælken sidder helt ude i højre kant.
+    tap.style.right = p.classList.contains('open') ? '300px' : '0px';
+  }
+}
+
+let searchTimer = null;
+function applyFilter(q) {
+  q = (q||'').trim();
+  window.clearTimeout(searchTimer);
+  if (!q) { applyHidden(); initNetwork(); return; }
+  searchTimer = window.setTimeout(async () => {
+    sætStatus('Søger i hele databasen...');
+    try {
+      let sdata = null;
+      if (aktivHjerne === 'OPS') {
+        sdata = søgLokalt(q);
+      } else {
+        const res = await fetch('api/search?q=' + encodeURIComponent(q));
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        sdata = await res.json();
+      }
+      if (!sdata.match) {
+        sætStatus('Ingen match — viser alt');
+        applyHidden(); initNetwork(); return;
+      }
+      filteredNodes = sdata.nodes;
+      filteredEdges = sdata.edges;
+      document.getElementById('stat-nodes').textContent = sdata.nodeCount;
+      sætStatus('Fundet ' + sdata.nodeCount + ' noder');
+      initNetwork();
+    } catch (e) {
+      sætStatus('Søgefejl: ' + e.message);
+    }
+  }, 400);
+}
+
+window.addEventListener('resize', () => { if (network) network.redraw(); });
+
+// ===== Bundpanel: dobbeltklik-kollaps + pil-toggle + drag-resize =====
+(function setupBottomResize() {
+  const panel = document.getElementById('bottom-panel');
+  const handle = document.getElementById('bottom-handle');
+  const chevron = document.getElementById('handle-chevron');
+  if (!panel || !handle) return;
+  let dragging = false;
+  let openHeight = 240; // husk åben-højde når panelet kollapses
+
+  function isClosed() { return panel.classList.contains('closed'); }
+  function open() { panel.classList.remove('closed'); panel.style.height = openHeight + 'px'; }
+  function close() { if (!isClosed()) { openHeight = panel.getBoundingClientRect().height; } panel.classList.add('closed'); }
+  // eksponér toggle til den usynlige bundbjælke (DNA 2026-10-16)
+  window.toggleBund = function () { isClosed() ? open() : close(); };
+
+  // dobbeltklik på håndtaget (eller pilen) lukker/åbner
+  handle.addEventListener('dblclick', (e) => {
+    e.preventDefault();
+    isClosed() ? open() : close();
+  });
+  if (chevron) chevron.addEventListener('dblclick', (e) => { e.stopPropagation(); isClosed() ? open() : close(); });
+  if (chevron) chevron.addEventListener('click', (e) => { e.stopPropagation(); isClosed() ? open() : close(); });
+
+  // træk kun i håndtaget når panelet er ÅBNT (min 96px)
+  handle.addEventListener('mousedown', (e) => {
+    if (isClosed()) { close(); return; }
+    dragging = true;
+    e.preventDefault();
+    document.body.style.cursor = 'row-resize';
+    document.body.style.userSelect = 'none';
+  });
+  document.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    const rect = document.getElementById('wrap').getBoundingClientRect();
+    const fromBottom = rect.bottom - e.clientY;
+    const maxH = window.innerHeight * 0.7;
+    const h = Math.max(96, Math.min(fromBottom, maxH));
+    panel.style.height = h + 'px';
+    openHeight = h;
+  });
+  document.addEventListener('mouseup', () => {
+    dragging = false;
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+  });
+})();
+
+// ===== Noter — Obsidian via Ops (port 6122) =====
+// Vieweren spørger Ops-tjenesten; den læser vaulten. Vi rører intet selv.
+let noterCache = null;
+
+async function toggleNoter() {
+  const pane = document.getElementById('noter-pane');
+  const meta = document.getElementById('bottom-meta');
+  const scroll = document.getElementById('bottom-scroll');
+  const tabs = document.getElementById('bottom-tabs');
+  const panel = document.getElementById('bottom-panel');
+  const knap = document.getElementById('noterBtn');
+  if (!pane.hidden) {                       // luk
+    pane.hidden = true;
+    meta.style.display = ''; scroll.style.display = ''; tabs.style.display = '';
+    if (knap) knap.classList.remove('active');
+    return;
+  }
+  meta.style.display = 'none'; scroll.style.display = 'none'; tabs.style.display = 'none';
+  pane.hidden = false;
+  if (knap) knap.classList.add('active');
+  panel.classList.remove('closed');
+  if (!panel.style.height || parseInt(panel.style.height) < 200) panel.style.height = '300px';
+  if (!noterCache) {
+    document.getElementById('noter-tal').textContent = 'henter …';
+    try {
+      const svar = await fetch('/api/noter');
+      const d = await svar.json();
+      if (d.fejl) { document.getElementById('noter-tal').textContent = 'fejl: ' + d.fejl; return; }
+      noterCache = d.noter || [];
+    } catch (e) { document.getElementById('noter-tal').textContent = 'fejl: ' + e; return; }
+  }
+  visNoter(document.getElementById('noter-filter').value);
+}
+
+function visNoter(q) {
+  q = (q || '').toLowerCase().trim();
+  const liste = document.getElementById('noter-liste');
+  const alle = noterCache || [];
+  const noter = q ? alle.filter(n => (n.navn + ' ' + n.sti + ' ' + n.gruppe).toLowerCase().includes(q)) : alle;
+  document.getElementById('noter-tal').textContent = noter.length + ' af ' + alle.length + ' noter';
+  if (!noter.length) { liste.innerHTML = '<li class="tom">ingen noter fundet</li>'; return; }
+  liste.innerHTML = '';
+  for (const n of noter) {
+    const li = document.createElement('li');
+    li.title = n.sti;
+    const b = document.createElement('b'); b.textContent = n.navn;
+    const s = document.createElement('span'); s.textContent = n.gruppe;
+    li.append(b, s);
+    li.onclick = () => aabnNote(n.sti, li);
+    liste.appendChild(li);
+  }
+}
+
+async function aabnNote(sti, li) {
+  const felt = document.getElementById('noter-tekst');
+  felt.textContent = 'henter ' + sti + ' …';
+  for (const el of document.querySelectorAll('#noter-liste li')) el.style.background = '';
+  if (li) li.style.background = '#1e293b';
+  try {
+    const svar = await fetch('/api/note?sti=' + encodeURIComponent(sti));
+    const d = await svar.json();
+    felt.textContent = d.tekst || ('fejl: ' + (d.fejl || 'noten kunne ikke læses'));
+  } catch (e) { felt.textContent = 'fejl: ' + e; }
+}
+
+// ===== GENOPTAG HVOR MAN SLAP (DNA 2026-10-13) =====
+// Opdaterer man siden, kommer man tilbage til SAMME visning (Obsidian, hjernen
+// eller efterforskningen) og SAMME node — ikke altid til graf-databasen.
+async function genoptag() {
+  let ds = 'hjerne', id = '';
+  try {
+    ds = localStorage.getItem('viewer_kilde') || 'hjerne';
+    const s = JSON.parse(localStorage.getItem('viewer_sidste') || '{}');
+    if (s && s.ds === ds && s.id) id = String(s.id);
+  } catch (e) {}
+  if (ds === 'ops') await loadOps();
+  else if (ds === 'efterforskning') await loadEfterforskning();
+  else await loadGraph();
+  if (id) {
+    const n = filterFullNodes().find(x => String(x.id) === id);
+    if (n) {
+      showSelected(n);
+      if (window.gnet) window.gnet.selectNodes([String(id)]);
+    }
+  }
+}
+genoptag();
+
+// ===== USYNLIGE BJÆLKER I SIDEN OG BUNDEN (DNA 2026-10-16) =====
+// Dobbeltklik på bjælken åbner/lukker; klik på den lille prik i midten gør det samme.
+(function () {
+  const sideTap = document.getElementById('side-tap');
+  if (sideTap) {
+    sideTap.addEventListener('dblclick', () => toggleLegendPanel());
+    const dot = sideTap.querySelector('.tap-dot');
+    if (dot) dot.addEventListener('click', (e) => { e.stopPropagation(); toggleLegendPanel(); });
+    // DNA 2026-10-16: musehjulet i den usynlige bjælke ruller i domæne-panelet
+    // (legend-panel), så man kan rulle op/ned i listen uden at pege ind i panelet.
+    sideTap.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const panel = document.getElementById('legend-panel');
+      if (!panel) return;
+      panel.scrollTop += e.deltaY;
+    }, { passive: false });
+  }
+  const bottomTap = document.getElementById('bottom-tap');
+  if (bottomTap) {
+    bottomTap.addEventListener('dblclick', () => { if (window.toggleBund) window.toggleBund(); });
+    const dot = bottomTap.querySelector('.tap-dot');
+    if (dot) dot.addEventListener('click', (e) => { e.stopPropagation(); if (window.toggleBund) window.toggleBund(); });
+  }
+})();
+
+// Hent efterforskningslisten fra Flowsint og fyld rullemenuen (DNA 2026-10-16).
+hentEfterforskninger();
+</script>
+</body>
+</html>

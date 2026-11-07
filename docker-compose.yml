@@ -1,0 +1,61 @@
+# Super Light Brain — én container, ingen andre tjenester.
+#
+#   docker compose build
+#   docker compose up -d
+#
+# Porte:
+#   6305  konklusionsmotoren (+ semantisk søgning)  <- den man kobler OpenWebUI på
+#   6302  forståelsesbroen (enricher)
+#   6304  drømmen (status, fund, kør, lær)
+#   6301  viewer (graphviewer)
+#   6303  ops
+#
+# Ingen data i image'et. Volumes starter rene — det er meningen.
+
+services:
+  super-light-brain:
+    build:
+      context: .
+      dockerfile: Dockerfile.hjerne
+    image: helix-super-light-brain:latest
+    container_name: Helix_Light_Brain
+    restart: unless-stopped
+    ports:
+      - "6301:6123"
+      - "6302:6302"
+      - "6303:6122"
+      - "6304:6304"
+      - "6305:6305"
+    environment:
+      - TZ=Europe/Lisbon
+      # ponytail: én GPU til hjernen. Fjern linjen hvis værten kun har ét kort.
+      - NVIDIA_VISIBLE_DEVICES=0
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - DROM_OLLAMA_HOST=host.docker.internal
+      - DROM_MODEL=H.E.L.I.X:9b-neo-150k
+      - DROM_LAER_INTERVAL=3600
+      - TRIGGER_INTERVAL=60
+      - POSTGRES_USER=hjerne
+      - POSTGRES_PASSWORD=skift-mig
+      - POSTGRES_DB=hjerne
+      - OPS_VAULT=/vault
+      - OBSIDIAN_VAULT=/vault
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - brain_pg:/var/lib/postgresql/data
+      - brain_modeller:/opt/lillehjerne/modeller
+      - brain_obsidian:/vault
+    networks:
+      - brain_net
+    runtime: nvidia
+
+networks:
+  brain_net:
+    name: brain_net
+    driver: bridge
+
+volumes:
+  brain_pg:
+  brain_modeller:
+  brain_obsidian:

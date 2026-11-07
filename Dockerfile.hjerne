@@ -1,0 +1,121 @@
+FROM postgres:18
+
+# Helix Light Brain (lillehjernen) — trokopi af Super Brain.
+#
+# Alt hvad Super Brain består af er med HER, undtagen to ting:
+#   1. LLM'en (taleren). Den er ikke i lillehjernen.
+#   2. Datagrundlaget. Det følger ikke med; volumes starter rene.
+#
+# I stedet for HC (Honcho) kører vores egen konklusionsmotor + Drømmen.
+# Drømmen spørger 9B'eren UDENFOR containeren når den er i tvivl — svaret
+# bliver et FORSLAG, aldrig en konklusion.
+#
+# Tjenester:
+#   PostgreSQL 18 + AGE  (grafen)
+#   Ollama               (KUN BGE-M3 — indlejring til søgning)
+#   Konklusionsmotor     6305
+#   Drømmen              6304
+#   NPLL-scorer          6080
+#   Ops                  6122
+#   Viewer               6123  <- graphvieweren, uændret trokopi
+#   Broen (enricher)     —
+#   Kategoriseringen     —
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      ca-certificates curl zstd tini \
+      python3 python3-psycopg python3-venv \
+ && curl -fsSL https://ollama.com/install.sh | sh \
+ && apt-get install -y --no-install-recommends \
+      postgresql-contrib-18 \
+      postgresql-18-pgaudit \
+      postgresql-plpython3-18 \
+      postgresql-18-age \
+      postgresql-18-pgvector \
+      postgresql-18-plr \
+      postgresql-18-http \
+      postgresql-18-jsquery \
+      postgresql-18-pg-wait-sampling \
+      postgresql-18-pg-uuidv7 \
+      postgresql-18-partman \
+      postgresql-18-hypopg \
+      postgresql-18-hll \
+      postgresql-18-tdigest \
+      postgresql-18-roaringbitmap \
+      postgresql-18-show-plans \
+      postgresql-18-pg-stat-plans \
+ && rm -rf /var/lib/apt/lists/*
+
+# ---------- Konklusionsmotoren + Drømmen (vores eget lag) ----------
+COPY start.py            /opt/lillehjerne/start.py
+COPY openapi.py          /opt/lillehjerne/openapi.py
+COPY trigger.py          /opt/lillehjerne/trigger.py
+COPY konklusion/         /opt/lillehjerne/konklusion/
+COPY drom/               /opt/lillehjerne/drom/
+COPY init.sql            /opt/lillehjerne/init.sql
+
+# ---------- Trokopi fra Super Brain ----------
+COPY viewer/             /opt/lillehjerne/viewer/
+COPY enricher/           /opt/lillehjerne/enricher/
+COPY ops/                /opt/lillehjerne/ops/
+COPY npll/               /opt/lillehjerne/npll/
+COPY odin/               /opt/lillehjerne/odin/
+COPY stemme/             /opt/lillehjerne/stemme/
+COPY initdb/             /opt/lillehjerne/initdb/
+COPY scripts/            /opt/lillehjerne/scripts/
+RUN mkdir -p /opt/lillehjerne/ollama /opt/lillehjerne/modeller \
+ && chmod +x /opt/lillehjerne/scripts/*.sh \
+ && chown -R postgres:postgres /opt/lillehjerne \
+ && chmod -R a+rX /opt/lillehjerne/ollama /opt/lillehjerne/modeller
+
+# Viewerens og OPS' Python-afhængigheder (samme som Super Brain)
+RUN python3 -m venv /opt/lillehjerne/venv \
+ && /opt/lillehjerne/venv/bin/pip install --no-cache-dir \
+      flask requests psycopg2-binary "psycopg[binary]"
+
+ENV OLLAMA_HOST=127.0.0.1:11434 \
+    OLLAMA_MODELS=/opt/lillehjerne/modeller \
+    KONKLUSION_PORT=6305 \
+    DROM_PORT=6304 \
+    VIEWER_PORT=6123 \
+    OPS_PORT=6122 \
+    NPLL_PORT=6080 \
+    OPS_VAULT=/vault \
+    OBSIDIAN_VAULT=/vault \
+    EMBED_MODEL=bge-m3:latest \
+    PGDATA=/var/lib/postgresql/data \
+    POSTGRES_USER=hjerne \
+    POSTGRES_PASSWORD=skift-mig \
+    POSTGRES_DB=hjerne \
+    DB_HOST=127.0.0.1 \
+    DB_PORT=5432 \
+    DB_NAME=hjerne \
+    DB_USER=hjerne \
+    DB_PASS=skift-mig \
+    GRAPH=hjerne
+
+EXPOSE 6123 6122 6301 6302
+
+VOLUME ["/var/lib/postgresql/data", "/opt/lillehjerne/modeller", "/vault"]
+
+ENTRYPOINT ["/usr/bin/tini", "--", "/opt/lillehjerne/scripts/supervisor.sh"]
+
+# ---------- Den danske læser (DNA 2. nov 2026) ----------
+# spaCy + den store danske model bages ind, så lillehjernen er sin egen enhed:
+# den kan læse dansk uden at hente noget udefra. Motoren bruger den til at
+# finde emne og genstand i sætninger hvor de gamle mønstre ikke slog til.
+#
+# numpy skal ned under 2 FØR spaCy, ellers knækker thinc med
+# "numpy.dtype size changed" (målt under tørkørslen).
+RUN apt-get update && apt-get install -y --no-install-recommends python3-pip \
+ && rm -rf /var/lib/apt/lists/* \
+ && python3 -m pip install --no-cache-dir --break-system-packages \
+      "spacy>=3.8,<3.9" \
+ && python3 -m pip install --no-cache-dir --break-system-packages \
+      https://github.com/explosion/spacy-models/releases/download/da_core_news_lg-3.8.0/da_core_news_lg-3.8.0-py3-none-any.whl
+
+# Bevis ved build: modellen skal kunne indlæses, ellers fejler bygget her —
+# ikke i drift kl. 3 om natten.
+RUN python3 -c "import spacy; n=spacy.load('da_core_news_lg'); print('dansk model OK', n.meta['version'])"
