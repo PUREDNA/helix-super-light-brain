@@ -4,7 +4,27 @@ Hjernen i Helix-systemet. Den erstatter Super Brains sprogmodel med regler:
 Python udleder, Postgres husker, spaCy læser dansk.
 
 Dette repository er hjernen ALENE. Ingen andre Helix-tjenester. Ét image,
-én container.
+én container — og et Hermes-plugin ved siden af, til når hjernen skal
+installeres i en agent.
+
+## To udgaver — og hvorfor
+
+Samme hjerne, to måder at installere den på. Det er ikke to forskellige
+systemer, det er samme kode i to indpakninger:
+
+| | Docker-image | Hermes-plugin |
+|---|---|---|
+| **Hvad det er** | Hele hjernen: Postgres, Ollama, motor, drøm, viewer | Kun krogen ind i Hermes |
+| **Hvor det kører** | I containeren | Inde i agenten |
+| **Kræver** | Docker + NVIDIA | En kørende hjerne |
+| **Giver** | Hukommelsen, databasen, brugerfladen | At agenten skriver til hjernen og læser fra den |
+
+Pluginnet indeholder ingen hjerne. Det er to små filer der peger på den:
+`memory.py` sender hver tur ind i hjernen og henter konklusionerne tilbage,
+og `compression.py` flytter historikken råt ind i hjernen når vinduet
+fylder, i stedet for at opsummere den.
+
+Så rækkefølgen er: start containeren, og sæt derefter pluginnet i agenten.
 
 ## Hvad den er
 
@@ -136,3 +156,22 @@ Dockerfile.hjerne       image'et (bruges)
 
 - Adverbialer som "1,4 fire" kan havne i parentesen på en værdi.
 - Gamle konklusioner fra før læseren blev rettet ligger stadig som støj.
+
+## Som plugin i Hermes
+
+```bash
+mkdir -p ~/.hermes/plugins/helix-super-light-brain
+cp plugin/*.py plugin/plugin.yaml ~/.hermes/plugins/helix-super-light-brain/
+```
+
+Sæt derefter i `config.yaml`:
+
+```yaml
+memory:
+  provider: helix-super-light-brain
+context:
+  engine: helix-compression
+```
+
+Kører hjernen et andet sted end 127.0.0.1, sæt `LILLEHJERNE` (læsning, 6302)
+og `LILLEHJERNE_MOTOR` (skrivning, 6305).

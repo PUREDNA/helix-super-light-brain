@@ -1,0 +1,6 @@
+name: helix-super-light-brain
+version: 0.2.0
+description: Helix Super Light Brain som plugin — Memory Provider (Lillehjernen) og Context Engine (Helix Compression). Flytter viden ind i hjernen i stedet for at opsummere den.
+author: Helix
+memory_provider: true
+context_engine: true
