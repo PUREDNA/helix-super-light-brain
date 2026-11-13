@@ -91,7 +91,7 @@ def api_kontor():
                        coalesce(dokument,''), coalesce(side_vores,0),
                        coalesce(kilde_tekst,'')
                 FROM hjerne.konklusion
-                WHERE ejer = %s
+                WHERE ejer = %s AND NOT ugyldig
                 ORDER BY laert DESC LIMIT 3000
             """, (ejer,))
         else:
@@ -100,7 +100,7 @@ def api_kontor():
                        coalesce(dokument,''), coalesce(side_vores,0),
                        coalesce(kilde_tekst,'')
                 FROM hjerne.konklusion
-                WHERE ejer IS NULL OR ejer = ''
+                WHERE (ejer IS NULL OR ejer = '') AND NOT ugyldig
                 ORDER BY laert DESC LIMIT 3000
             """)
         rows = cur.fetchall()
@@ -336,6 +336,12 @@ def api_search():
     c.autocommit = True
     cur = c.cursor()
     cur.execute("SET search_path = ag_catalog, public")
+    # DNA 11. nov 2026: kontor-grænse — kun samme ejers knuder.
+    ejer_s = (__import__("flask").request.args.get("ejer") or "").strip().replace("'", "")
+    # DNA 11. nov 2026: ingen ejer = ingen data (ellers kunne man soege i alt).
+    if not ejer_s:
+        return __import__("flask").jsonify({"nodes": [], "error": "ejer mangler"})
+    ejer_led = f" AND coalesce(v.ejer,'') = '{ejer_s}'"
     try:
         # Sørg for at den rensede tekst er sikker i en citeret streng (CONTAINS-modning,
         # read-only). Fjerne enkle anførselstegn for at undgå at bryde citeringen.
@@ -392,8 +398,8 @@ def api_search():
             SELECT * FROM cypher('{GRAPH}',
                 $$
                 MATCH (v)
-                WHERE '{safe}' IN labels(v)
-                   OR {vilkår}
+                WHERE ('{safe}' IN labels(v)
+                   OR {vilkår}){ejer_led}
                 RETURN id(v) AS vid, labels(v) AS labs, properties(v) AS props
                 LIMIT 60
                 $$) AS (vid agtype, labs agtype, props agtype)
@@ -444,11 +450,17 @@ def api_neighbors():
     c.autocommit = True
     cur = c.cursor()
     cur.execute("SET search_path = ag_catalog, public")
+    # DNA 11. nov 2026: kontor-grænse — en bruger kan ikke trække DNA's knude op.
+    ejer_n = (__import__("flask").request.args.get("ejer") or "").strip().replace("'", "")
+    # DNA 11. nov 2026: ingen ejer = ingen data.
+    if not ejer_n:
+        return __import__("flask").jsonify({"nodes": [], "edges": [], "error": "ejer mangler"})
+    ejer_n_led = f" AND coalesce(v.ejer,'') = '{ejer_n}'"
     try:
         cur.execute(f"""
             SELECT * FROM cypher('{GRAPH}',
                 $$
-                MATCH (v) WHERE toString(id(v)) = '{clean}'
+                MATCH (v) WHERE id(v) = {clean}{ejer_n_led}
                 RETURN id(v) AS vid, labels(v) AS labs, properties(v) AS props
                 LIMIT 1
                 $$) AS (vid agtype, labs agtype, props agtype)
@@ -463,7 +475,7 @@ def api_neighbors():
             SELECT * FROM cypher('{GRAPH}',
                 $$
                 MATCH (v)-[e]-(w)
-                WHERE toString(id(v)) = '{nid0}'
+                WHERE id(v) = {str(nid0).split('.')[0]}
                   AND NOT ('Periode' IN labels(v) AND 'Periode' IN labels(w))
                 RETURN id(e) AS eid, id(v) AS va, id(w) AS wb, type(e) AS t,
                        id(w) AS wid, labels(w) AS wl, properties(w) AS wp
@@ -495,11 +507,22 @@ def api_graph():
     c.autocommit = True
     cur = c.cursor()
     cur.execute("SET search_path = ag_catalog, public")
+    # DNA 11. nov 2026: KONTORET ER GRÆNSEN. Er der en ejer med, vises KUN
+    # den brugers knuder. Uden filteret kunne enhver bruger i OpenWebUI åbne
+    # hovedbygningen og se DNA's sager. Tom ejer = hovedbygningen (DNA's eget).
+    ejer = (request.args.get("ejer") or "").strip().replace("'", "")
+    # DNA 11. nov 2026: INGEN EJER = INGEN DATA. Foer viste et kald uden
+    # ejer-parameter hele hovedbygningen, saa enhver kunne hente DNA's graf
+    # ved blot at udelade parameteren.
+    if not ejer:
+        return jsonify({"nodes": [], "edges": [], "error": "ejer mangler"})
+    filter_led = f" AND coalesce(v.ejer,'') = '{ejer}'"
     try:
         # Noder: id, labels, properties — alt inde i cypher (verificeret syntaks)
         cur.execute(f"""
             SELECT * FROM cypher('{GRAPH}', $$
-                MATCH (v) RETURN id(v) AS vid, labels(v) AS labs, properties(v) AS props
+                MATCH (v) WHERE true{filter_led}
+                RETURN id(v) AS vid, labels(v) AS labs, properties(v) AS props
             $$) AS (vid agtype, labs agtype, props agtype)
             LIMIT {MAX_NODES}
         """)

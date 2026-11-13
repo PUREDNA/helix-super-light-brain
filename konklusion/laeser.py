@@ -113,6 +113,76 @@ ISLANDSK = re.compile(
     r"þessu|þeir|þær|ekkert|sagði|kemur|komið)\b",
     re.I,
 )
+# DNA 2026-11-13: ORDRER OG TILLADELSER ER IKKE VIDEN.
+# En lille model der laeser hukommelsen maa ALDRIG finde en konklusion der
+# siger "du skal bygge X" eller "tilladelse givet" — den ville tro det var
+# en sandhed om verden, eller en ordre den skulle foelge. Ordrer hoerer til
+# samtalen, ikke til hukommelsen. Kun fakta gemmes.
+ORDRE = re.compile(
+    r"\b(du|vi)\s+(skal|maa|kan|boer)\s+"
+    r"(lave|bygge|rette|slette|koere|saette|give|sende|finde|tjekke|se|tage|"
+    r"starte|genstarte|aendre|skrive|vise|hente|bruge)\b"
+    r"|\b(tilladelse|godkendelse)\b.{0,25}\b(givet|ok|ja|modtaget|har)\b"
+    r"|^(slet|ret|byg|koer|start|genstart|aendr|skriv|vis|hent|giv|send|find|tjek|tag)\b"
+    # "Ja tak, det maa du gerne" / "det maa du gerne" = tilladelse, ikke viden.
+    r"|^(ja|nej|ok|okay|fint|godt)\b[^.!?]*\b(gerne|godt|bare|nu|endnu|først|straks|omgående)\b"
+    r"|^(ja|nej|ok|okay)\b[,:\s]+(vis|slet|ret|byg|kør|start|giv|send|find|tjek|tag|hent|skriv|ændr)\b"
+    r"|\bdu\s+(maa|kan)\s+gerne\b",
+    re.I,
+)
+
+
+# DNA 2026-11-13: ARBEJDSNOTER ER IKKE VIDEN.
+# "Danny tjekker om den har de nye rettelser" beskriver hvad vi gjorde i
+# samtalen — ikke hvordan verden er. En model der laeser det senere tror det
+# er en kendsgerning. Kun saetninger der beskriver en tilstand maa gemmes.
+ARBEJDSNOTE = re.compile(
+    r"^(danny|helix|jeg|vi|han|hun|de)\s+"
+    r"(tjekker|finder|proever|ser|kigger|koerer|retter|bygger|"
+    r"laver|saetter|venter|skal|vil|kan|goer|siger|faar|tager)\b"
+    r"|^(nu|saa|sådan|derfor|ellers|imens|bagefter)\s",
+    re.I,
+)
+
+
+def _har_substans(t: str) -> bool:
+    """Har saetningen noget der kan slas op senere?
+
+    Et navn, et tal, et sted eller en dato. "Der er grafen." har intet af det;
+    "Dio bor i Brondby" har baade navn og sted.
+    """
+    if re.search(r"\d", t):                      # tal, dato, portnummer
+        return True
+    # Egennavn — men ikke et almindeligt ord blot fordi det staar foerst.
+    if re.search(r"\b(?!(?:Der|Det|Den|Jeg|Du|Vi|Han|Hun|De|Nu|Saa|Så|Men|Og|"
+                 r"Fordi|Hvis|Naar|Når|Sådan|Her|Derfor|Ellers|Imens)\b)"
+                 r"[A-ZÆØÅ][a-zæøå]{2,}", t):
+        return True
+    if len(t.split()) >= 8:                      # lang nok til at baere indhold
+        return True
+    return False
+
+
+# DNA 2026-11-13: SIDSTE SIGTE — kun fulde, beskrivende saetninger slipper ud.
+# En konklusion skal kunne laeses som et svar paa "hvad ved vi?" uden kontekst.
+_METASPROG = re.compile(
+    r"(dokumentliste|hvem\s*/\s*hvornår|oprettet \d\d-\d\d|anmoder|anbefale|"
+    r"check at|status:|^\s*\d+\.\s|--\s|##|\*\*|tør?t kørt|tørt kørt|"
+    r"efterlyser|tabellen har|rapporten|kopien|omfanget)",
+    re.I,
+)
+
+
+def er_metasprog(tekst: str) -> bool:
+    """Er saetningen arbejdssprog fra vores egen samtale?
+
+    DNA 13. nov 2026: lillehjernen skal svare paa "hvad ved vi om sagen?" —
+    ikke "hvad lavede vi i tirsdags?". Formatering, todo-lister, statuslinjer
+    og interne noter hoerer i samtalen, ikke i hukommelsen.
+    """
+    return bool(_METASPROG.search(tekst or ""))
+
+
 MEKANIK = re.compile(
     # DNA 5. nov 2026: "Ja"/"Nej" er kun fyld naar de staar ALENE.
     # "Ja, du skal lave det omgående" er en ordre, ikke en hilsen.
@@ -183,6 +253,20 @@ def er_samtalestoej(tekst: str) -> bool:
     if not t:
         return True
     if SPOERGSMAAL.search(t) or MEKANIK.match(t):
+        return True
+    # DNA 2026-11-13: ordrer og tilladelser gemmes ALDRIG som konklusioner.
+    if ORDRE.search(t):
+        return True
+    # Arbejdsnoter om hvad vi gjorde i samtalen er heller ikke viden.
+    if ARBEJDSNOTE.search(t):
+        return True
+    # DNA 2026-11-13: en saetning uden navn, tal eller sted er ikke viden.
+    # "Der er grafen." / "Sa broen peger paa tom luft." beskriver ingenting
+    # der kan slas op senere.
+    if not _har_substans(t):
+        return True
+    # Formatering, todo-lister og statuslinjer er arbejdssprog, ikke viden.
+    if er_metasprog(t):
         return True
     if FILTER_STOEJ.search(t):
         return True
@@ -307,7 +391,13 @@ def _brugbart(navn: str, tok=None) -> bool:
     return True
 
 
-def find_taler(tekst: str, dokument: str | None = None) -> str | None:
+# DNA's eget OpenWebUI-bruger-id. Kun denne ejer maa faa "Danny" som taler
+# naar beskeden ikke baerer et stemmemaerke (DNA 11. nov 2026).
+DANNY_EJER = "99a107f4-b20e-468b-9b9e-a019c23c196e"
+
+
+def find_taler(tekst: str, dokument: str | None = None,
+               ejer: str | None = None) -> str | None:
     """Hvem siger dette? Læs stemmegenkendelsens mærke, gæt ikke.
 
     DNA 3. nov 2026: beskeden kommer med et mærke i begyndelsen —
@@ -327,10 +417,14 @@ def find_taler(tekst: str, dokument: str | None = None) -> str | None:
         if not navn or navn.lower() in ("ukendt", "unknown", "arvet"):
             return None     # vi ved ikke hvem — gæt ikke
         return navn
-    # INTET MAERKE: kun i samtalen er det DNA. I et dokument er taleren ukendt,
-    # og "jeg" bliver staaende som det blev skrevet.
+    # INTET MAERKE: kun i samtalen er det DNA — og kun naar ejeren ER DNA.
+    # DNA 11. nov 2026: Asger skriver i OpenWebUI uden stemmemaerke. Reglen
+    # gjorde hans 264 saetninger til "Danny siger", saa hans research forurenede
+    # DNA's egne konklusioner. En fremmed ejer faar sit eget navn som taler.
     if dokument:
         return None
+    if ejer and ejer != DANNY_EJER:
+        return f"bruger:{ejer}"
     return "Danny"          # ingen stemme i beskeden = skrevet af DNA
 
 
@@ -616,7 +710,8 @@ def profil_for(dokument: str | None) -> str:
 
 
 def laes(tekst: str, taler: str | None = None,
-         dokument: str | None = None, side: int | None = None) -> list[dict]:
+         dokument: str | None = None, side: int | None = None,
+         ejer: str | None = None) -> list[dict]:
     """Laes en tekst og returnér de saetninger der ER konklusioner.
 
     DNA 4. nov 2026 — denne regel erstatter den gamle der splittede saetningen
@@ -647,7 +742,7 @@ def laes(tekst: str, taler: str | None = None,
     if taler is None:
         # DNA 5. nov 2026: taleren afgoeres i den rigtige profil. I et dokument
         # er der intet maerke, og saa er taleren UKENDT — "jeg" bliver staaende.
-        taler = find_taler(tekst, dokument)
+        taler = find_taler(tekst, dokument, ejer)
     # DNA 5. nov 2026: "ukendt" er en ADVARSEL, ikke et navn. Staar der
     # "[taler: ukendt]" i beskeden, ved vi ikke hvem der taler — men vi ved
     # at det ikke er Danny der skrev den. Saa kan "jeg" ikke blive til ham.

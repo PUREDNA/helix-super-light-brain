@@ -72,9 +72,14 @@ def _ag_val(r) -> str:
         return s
 
 
-def find_eksisterende(cur, etiket: str, navn: str) -> str | None:
-    """Returner det eksisterende navn der matcher normaliseret, ellers None."""
-    raekker = cypher(cur, f"MATCH (n:{etiket}) RETURN n.navn")
+def find_eksisterende(cur, etiket: str, navn: str,
+                      ejer: str | None = None) -> str | None:
+    """Returner det eksisterende navn der matcher normaliseret, ellers None.
+
+    DNA 11. nov 2026: kun inden for SAMME ejer. Ellers landede Asgers personer
+    paa DNA's knuder.
+    """
+    raekker = cypher(cur, f"MATCH (n:{etiket}) WHERE n.ejer = '{esc(ejer or '')}' RETURN n.navn")
     maal = _norm(navn)
     for (r,) in raekker:
         if _norm(_ag_val(r)) == maal:
@@ -87,22 +92,30 @@ def cypher(cur, saetning: str, kolonner: str = "(v agtype)"):
     return cur.fetchall()
 
 
-def sikr_knude(cur, etiket: str, navn: str, **egenskaber):
-    """Findes knuden, bruges den. Ellers laves den. Aldrig to af samme navn."""
-    findes = cypher(cur, f"MATCH (n:{etiket} {{navn:'{esc(navn)}'}}) RETURN n.navn")
+def sikr_knude(cur, etiket: str, navn: str, ejer: str | None = None, **egenskaber):
+    """Findes knuden FOR DENNE EJER, bruges den. Ellers laves den.
+
+    DNA 11. nov 2026: BRUGEROPDELING. Foer slog opslaget kun paa navn, saa
+    Asgers personer landede paa DNA's knuder — hans sagsakter blev læst som
+    DNA's egen viden. Nu er ejeren en del af noeglen: to brugere kan have
+    hver sin "Hanne Simonsen" uden at de smelter sammen.
+    """
+    findes = cypher(cur, f"MATCH (n:{etiket} {{navn:'{esc(navn)}'}}) WHERE n.ejer = '{esc(ejer or '')}' RETURN n.navn")
     if findes:
         return
     par = "".join(f", {k}: '{esc(v)}'" for k, v in egenskaber.items() if v is not None)
-    cypher(cur, f"CREATE (n:{etiket} {{navn:'{esc(navn)}'{par}}}) RETURN n.navn")
+    cypher(cur, f"CREATE (n:{etiket} {{navn:'{esc(navn)}', ejer:'{esc(ejer or '')}'{par}}}) RETURN n.navn")
 
 
 def opdater_knude(cur, etiket: str, navn: str, **egenskaber):
-    """Findes knuden, opdateres de givne egenskaber. Findes den ikke, laves den.
+    """Findes knuden FOR SAMME EJER, opdateres de givne egenskaber. Ellers laves den.
 
     Forskellen fra sikr_knude: registerdata (fx CVR-nummer på en Firma-node)
     skal LANDE på den eksisterende node — ikke lave en dobbelt der flyder løst.
+    DNA 11. nov 2026: ejeren er en del af noeglen.
     """
-    findes = cypher(cur, f"MATCH (n:{etiket} {{navn:'{esc(navn)}'}}) RETURN n.navn")
+    ejer = egenskaber.get("ejer") or ""
+    findes = cypher(cur, f"MATCH (n:{etiket} {{navn:'{esc(navn)}'}}) WHERE n.ejer = '{esc(ejer)}' RETURN n.navn")
     if findes:
         sette = ", ".join(f"n.{k} = '{esc(v)}'" for k, v in egenskaber.items() if v is not None)
         if sette:
@@ -113,8 +126,12 @@ def opdater_knude(cur, etiket: str, navn: str, **egenskaber):
 
 
 def sikr_kant(cur, fra_etiket: str, fra_navn: str, kant: str,
-              til_etiket: str, til_navn: str, **egenskaber):
+              til_etiket: str, til_navn: str, ejer: str | None = None,
+              **egenskaber):
     """Findes kanten, bruges den. Ellers laves den.
+
+    DNA 11. nov 2026: kanten baerer ejeren, saa en brugers kanter ikke blandes
+    med en andens. Oprydningen af gamle kanter sker i SQL (se oprydningsscript).
 
     Tjekket er ikke pynt. Uden det skrev broen en NY kant hver gang to
     konklusioner naevnte den samme entitet — grafen voksede med dubletter
@@ -124,8 +141,8 @@ def sikr_kant(cur, fra_etiket: str, fra_navn: str, kant: str,
     """
     findes = cypher(
         cur,
-        f"MATCH (a:{fra_etiket} {{navn:'{esc(fra_navn)}'}})-[r:{kant}]->"
-        f"(b:{til_etiket} {{navn:'{esc(til_navn)}'}}) "
+        f"MATCH (a:{fra_etiket} {{navn:'{esc(fra_navn)}', ejer:'{esc(ejer or '')}'}})-[r:{kant}]->"
+        f"(b:{til_etiket} {{navn:'{esc(til_navn)}', ejer:'{esc(ejer or '')}'}}) "
         f"RETURN r LIMIT 1",
     )
     if findes:
@@ -133,9 +150,9 @@ def sikr_kant(cur, fra_etiket: str, fra_navn: str, kant: str,
     par = "".join(f", {k}: '{esc(v)}'" for k, v in egenskaber.items() if v is not None)
     cypher(
         cur,
-        f"MATCH (a:{fra_etiket} {{navn:'{esc(fra_navn)}'}}), "
-        f"(b:{til_etiket} {{navn:'{esc(til_navn)}'}}) "
-        f"CREATE (a)-[:{kant} {{{kant.lower()}: true{par}}}]->(b) RETURN 1",
+        f"MATCH (a:{fra_etiket} {{navn:'{esc(fra_navn)}', ejer:'{esc(ejer or '')}'}}), "
+        f"(b:{til_etiket} {{navn:'{esc(til_navn)}', ejer:'{esc(ejer or '')}'}}) "
+        f"CREATE (a)-[:{kant} {{{kant.lower()}: true, ejer:'{esc(ejer or '')}'{par}}}]->(b) RETURN 1",
     )
 
 
@@ -159,7 +176,7 @@ def hent_konklusioner(cur, graense: int) -> list[tuple]:
     cur.execute(
         """
         SELECT k.id::text, k.kilde_tekst, k.bevis, 'dna', 'dna',
-               k.oprettet, '{}'
+               k.oprettet, '{}', k.ejer
           FROM konklusion k
          WHERE k.kilde_tekst IS NOT NULL
            AND length(k.kilde_tekst) > 3
@@ -198,7 +215,7 @@ def koer_igennem(forbindelse, graense: int, vis: bool) -> dict:
         if not raekker:
             break
 
-        for kid, tekst, niveau, observer, observed, skabt, meta in raekker:
+        for kid, tekst, niveau, observer, observed, skabt, meta, ejer in raekker:
             # DNA 2026-10-18: SAMTALER SKAL IKKE IND I GRAFEN.
             # Alt andet gaar igennem som foer; kun kategori "Samtalen" springes over.
             try:
@@ -230,12 +247,12 @@ def koer_igennem(forbindelse, graense: int, vis: bool) -> dict:
                 # ubrugelig. Nu samles de paa ÉT punkt, "Konklusioner", som man kan
                 # slukke for i vieweren. Viden er ikke vaek — den ligger stadig i
                 # hjerne.konklusion og kan findes med den semantiske soegning.
-                sikr_knude(cur, "Konklusioner", "samlet", tekst="Konklusioner",
+                sikr_knude(cur, "Konklusioner", "samlet", ejer=ejer, tekst="Konklusioner",
                            niveau=niveau, bevis=bevis, observer=observer)
                 sikr_kant(cur, "Konklusioner", "samlet", "INDEHOLDER",
                           "Konklusion", kid, tekst=tekst[:200])
                 for navn, slags, svar in entiteter:
-                    sikr_knude(cur, "Register", svar.register, slags="opslag")
+                    sikr_knude(cur, "Register", svar.register, ejer=ejer, slags="opslag")
                     # Et opslag der kender sit kanoniske navn og sin etiket
                     # (fx CVR → "Firma" med firmanavnet) skal lande på den
                     # EKSISTERENDE node, ikke lave en dobbelt. Ellers bruges
@@ -245,7 +262,7 @@ def koer_igennem(forbindelse, graense: int, vis: bool) -> dict:
                         # Matcher den eksisterende node på normaliseret navn,
                         # så "Abild/v.Sandra Abild" lander på grafens
                         # "Abild/v. Sandra Abild" i stedet for at lave en dobbelt.
-                        fundet = find_eksisterende(cur, knude_etiket, svar.navn)
+                        fundet = find_eksisterende(cur, knude_etiket, svar.navn, ejer)
                         knude_navn = fundet if fundet else svar.navn
                         egenskaber = {"bevis": svar.bevis, "slags": slags,
                                       "cvr": navn}
@@ -254,16 +271,21 @@ def koer_igennem(forbindelse, graense: int, vis: bool) -> dict:
                         knude_navn = f"{slags.lower()}:{navn}"
                         egenskaber = {"entitet": navn, "slags": slags,
                                       "bevis": svar.bevis}
+                    egenskaber["ejer"] = ejer or ""
                     opdater_knude(cur, knude_etiket, knude_navn, **egenskaber)
+                    # DNA 11. nov 2026: Konklusion-knuden skal BAERE ejeren.
+                    # Foer blev den lavet implicit af kanten, og saa manglede
+                    # ejer-feltet — opslaget paa ejer ramte ingenting.
+                    sikr_knude(cur, "Konklusion", kid, ejer=ejer, tekst=tekst[:200])
                     sikr_kant(cur, "Konklusion", kid, "NÆVNER", knude_etiket,
-                              knude_navn)
+                              knude_navn, ejer=ejer)
                     sikr_kant(cur, "Konklusion", kid,
                               {DOKUMENTERET: "BEKRÆFTET_I",
                                IKKE_DOKUMENTERET: "AFKRÆFTET_I"}.get(svar.bevis, "STILLE_I"),
-                              knude_etiket, knude_navn)
+                              knude_etiket, knude_navn, ejer=ejer)
                     sikr_kant(cur, knude_etiket, knude_navn,
                               "OPSLÅET_I", "Register", svar.register,
-                              kilde=svar.kilde[:300])
+                              ejer=ejer, kilde=svar.kilde[:300])
                     cur.execute(
                         """INSERT INTO bro.entitet (navn, slags, register, bevis, kilde)
                            VALUES (%s,%s,%s,%s,%s)

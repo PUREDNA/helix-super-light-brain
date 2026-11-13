@@ -262,6 +262,28 @@ def sikr_skema(con):
         con.commit()
 
 
+def _noegle(tekst: str) -> str:
+    """Hvad handler sætningen om? Emne-ordene, uden tal og fyldord.
+
+    "VAS kører på port 6305" og "VAS kører på port 6301" giver samme nøgle,
+    fordi tallene er skilt ud. "Dio har nye færdigheder" og "Dio har svært ved
+    at sove" giver FORSKELLIGE nøgler, fordi indholdet er forskelligt.
+    """
+    import re as _re
+    FYLD = {"og", "i", "på", "for", "med", "at", "den", "det", "de", "er", "var",
+            "har", "have", "kan", "skal", "fra", "til", "som", "der", "en", "et",
+            "blev", "bliver", "så", "men", "om", "af", "ved", "efter", "over"}
+    ord_ = _re.findall(r"[a-zæøåA-ZÆØÅ]+", (tekst or "").lower())
+    kerne = sorted(w for w in ord_ if len(w) > 3 and w not in FYLD)
+    return " ".join(kerne[:6])
+
+
+def _tal(tekst: str) -> list[str]:
+    """Tallene i sætningen. Det er dem der kan modsige hinanden."""
+    import re as _re
+    return _re.findall(r"\d+", tekst or "")
+
+
 def er_praecisering(a: str, b: str) -> bool:
     """Er de to værdier samme sag, hvor den ene bare er mere præcis?
 
@@ -280,60 +302,70 @@ def er_praecisering(a: str, b: str) -> bool:
 def koer(con):
     fund = []
     with con.cursor() as cur:
-        # 1. Modsigelse — to værdier for samme emne+egenskab, der ER uenige.
-        # Er den ene blot en præcisering af den anden, er der ingen modsigelse.
+        # DNA 2026-11-13: DRØMMEN SAMMENLIGNER NU PÅ INDHOLDET, IKKE PÅ GÆT.
+        #
+        # Før grupperede den på emne+egenskab — to felter som en sprogmodel har
+        # gættet. Det gav 23 "forskellige værdier for have" under emne "vi",
+        # fordi 23 helt forskellige sætninger havde fået samme gættede etiket.
+        # Drømmen kaldte det en modsigelse. Det var den ikke.
+        #
+        # Nu sammenligner den på (a) den ordrette tekst normaliseret og (b) de
+        # TAL sætningen nævner. Kun når to sætninger handler om det SAMME emne
+        # og er uenige om et tal, er der en ægte modsigelse. Det er den slags
+        # der gør ondt: "porten er 6301" mod "porten er 6305".
         cur.execute("""
-            SELECT emne, egenskab, array_agg(DISTINCT vaerdi)
+            SELECT id, coalesce(kilde_tekst,''), emne, egenskab,
+                   coalesce(vaerdi,''), bevis, oprettet
             FROM konklusion
-            WHERE vaerdi IS NOT NULL
-            GROUP BY emne, egenskab
-            HAVING count(DISTINCT vaerdi) > 1
+            WHERE NOT ugyldig AND length(coalesce(kilde_tekst,'')) > 10
         """)
-        for emne, egenskab, vaerdier in cur.fetchall():
-            vaerdier = [str(v) for v in vaerdier]
-            ægte = [v for v in vaerdier
-                    if not any(o != v and er_praecisering(v, o) for o in vaerdier)]
-            if len(ægte) > 1:
-                # HVILKEN VANDT? (DNA 3. nov 2026). Har vi talt om porte og
-                # naevnt 6301, 6302 og til sidst 6305, staar alle tre som
-                # konklusioner. Droemmen skal ikke bare konstatere uenigheden —
-                # den skal pege paa den der gaelder. Reglen: nyeste DOKUMENTERET
-                # eller MAALT vinder; ellers den nyeste overhovedet. Den tabende
-                # slettes ikke, den bliver i historikken.
-                cur.execute("""
-                    SELECT vaerdi, bevis, oprettet
-                    FROM konklusion
-                    WHERE emne = %s AND egenskab = %s AND vaerdi = ANY(%s)
-                    ORDER BY (bevis IN ('MAALT','DOKUMENTERET')) DESC, oprettet DESC
-                    LIMIT 1
-                """, (emne, egenskab, [v for v in ægte]))
-                vinder = cur.fetchone()
-                hvem = ""
-                if vinder:
-                    hvem = (f" — gaelder: '{vinder[0]}' ({vinder[1]}, "
-                            f"{vinder[2]:%Y-%m-%d})")
-                fund.append(("modsigelse", emne,
-                             f"{len(ægte)} forskellige værdier for {egenskab}: "
-                             + " | ".join(ægte) + hvem,
-                             "vigtig"))
+        alle = cur.fetchall()
 
-        # 2. Forældelse — en nyere konklusion om samme emne+egenskab findes
+        grupper: dict[str, list] = {}
+        for r in alle:
+            kid, tekst, emne, egenskab, vaerdi, bevis, oprettet = r
+            noegle = _noegle(tekst)
+            if not noegle:
+                continue
+            grupper.setdefault(noegle, []).append(r)
+
+        for noegle, raekker in grupper.items():
+            if len(raekker) < 2:
+                continue
+            # Samme emne, men FORSKELLIGE tal = ægte modsigelse.
+            if len({t for r in raekker for t in _tal(r[1])}) < 2:
+                continue
+            nyeste = max(raekker, key=lambda r: r[6])
+            ældste = min(raekker, key=lambda r: r[6])
+            fund.append((
+                "modsigelse", nyeste[2],
+                f"'{ældste[1][:80]}' ({ældste[6]:%Y-%m-%d}) mod "
+                f"'{nyeste[1][:80]}' ({nyeste[6]:%Y-%m-%d}) — nyeste gælder",
+                "vigtig"))
+
+        # 2. Forældelse — samme udsagn gentaget, men den ældre har et andet tal.
         cur.execute("""
-            SELECT k1.emne, k1.egenskab, k1.vaerdi, k1.oprettet
-            FROM konklusion k1
-            WHERE EXISTS (
-                SELECT 1 FROM konklusion k2
-                WHERE k2.emne = k1.emne AND k2.egenskab = k1.egenskab
-                  AND k2.oprettet > k1.oprettet
-                  AND k2.vaerdi IS DISTINCT FROM k1.vaerdi
-            )
-            AND k1.oprettet < now() - interval '%s days'
-            LIMIT 500
+            SELECT id, coalesce(kilde_tekst,''), emne, oprettet
+            FROM konklusion
+            WHERE NOT ugyldig
+              AND oprettet < now() - interval '%s days'
+              AND length(coalesce(kilde_tekst,'')) > 10
+            ORDER BY oprettet DESC
+            LIMIT 3000
         """, (ALDER_DAGE,))
-        for emne, egenskab, vaerdi, oprettet in cur.fetchall():
-            fund.append(("foraeldelse", emne,
-                         f"{egenskab} = {vaerdi} (fra {oprettet:%Y-%m-%d}) er erstattet",
-                         "bemærk"))
+        aeldre = cur.fetchall()
+        for kid, tekst, emne, oprettet in aeldre:
+            noegle = _noegle(tekst)
+            if not noegle:
+                continue
+            for r in alle:
+                if r[0] == kid or r[6] <= oprettet:
+                    continue
+                if _noegle(r[1]) == noegle and _tal(r[1]) != _tal(tekst):
+                    fund.append(("foraeldelse", emne,
+                                 f"'{tekst[:80]}' ({oprettet:%Y-%m-%d}) er "
+                                 f"erstattet af nyere", "bemærk"))
+                    break
 
         # 3. Uden dokumentation — SAGT der har stået alene
         cur.execute("""

@@ -303,122 +303,6 @@ def find_iagttagelse_eller_tolkning(tekst: str) -> str:
     return "IAGTTAGELSE"
 
 
-# ================================================= KATEGORIER (DNA 5. nov 2026)
-# TO SLAGS VIDEN. De hoerer KUN til SAMTALEPROFILEN — dokumentprofilen roeres
-# ikke, saa vi ikke oedelaegger det der allerede virker.
-#   PERSONLIG: mennesker, dyr, følelser, familie, hverdag, helbred, vaner
-#   TEKNISK:   maskiner, porte, kode, systemer, værktøj, programmer
-PERSONLIG = re.compile(
-    r"\b(Danny|DNA|Dio|Deirdre|mor|far|søn|datter|barn|familie|"
-    r"hund|kat|dyr|Blackie|kaffe|mad|spiser|drikker|sover|glad|sur|trist|"
-    r"bekymret|vred|træt|syg|rask|læge|hospital|helbred|humør|følelse|"
-    r"ven|kæreste|nabo|ferie|hjem|bopæl|bor|flyttede|samvær|"
-    r"fødselsdag|alder|gift|skilt|privat)\b",
-    re.I,
-)
-TEKNISK_ORD = re.compile(
-    r"\b(maskine[nrs]?|container(en|e|s)?|docker|port(en|er)?|server(en|e)?|"
-    r"kode[n]?|script(s|et|er)?|api|database[n]?|tabel(len|ler|lerne)?|"
-    r"indeks(et|er)?|model(len|ler|lerne)?|ollama|gpu|vram|ssh|ftp|dns|"
-    r"systemd|cron|websocket|volume(t|s)?|fil(en|er|erne)?|mappe[nr]?|"
-    r"log(en|gen|filer)?|backup|deploy|image(t)?|kommando(en|er)?|"
-    r"terminal(en)?|repo|commit|motor(en|er)?|hjerne[n]?|graf(en|en|er)?|"
-    r"node[n]?|kant(en|er)?|konklusion(en|er)?|"
-    r"hud(en)?|helix|hermes|super brain|superbrain|lillehjerne[n]?)\b",
-    re.I,
-)
-# Naar BEGGE findes, afgoer handlingen: drikker/spiser/bor/er glad -> personlig.
-HANDLING_PERSONLIG = re.compile(
-    r"\b(spiser|drikker|sover|bor|flytter|flyttede|er glad|er sur|er træt|"
-    r"er syg|er rask|kan lide|holder af|elsker|had(er)|savner|"
-    r"har en hund|har en kat|har en søn|har en datter|har en kæreste|"
-    r"hedder|føler|græder|griner|hygger|fisker|går tur|laver mad|"
-    r"henter|besøger|rinder til|skændes|blev frikendt|kom i retten)\b",
-    re.I,
-)
-
-
-def taler_kategori(taler: str | None) -> str | None:
-    """Hvem talte? (DNA 5. nov 2026)
-
-    Samtaler deles op efter taleren, ikke efter emne. Det gælder ALLE agenter,
-    ikke kun Helix: enhver der taler med DNA faar sit eget spor — Su, Mr. X,
-    Bob, hvem det saa er. Saa kan hver agent se hvad den selv har lavet, og
-    DNA kan se hvem der sagde hvad, uden at det blandes sammen.
-
-      Danny   — DNA's egne ord
-      Helix   — assistentens egne ord og fejl (kan ses bagefter)
-      <navn>  — den talende agents eller persons navn, som det staar
-      None    — ingen taler. Vi gaetter ikke, og "ukendt" er ikke en kategori.
-    """
-    if not taler:
-        return None
-    t = taler.strip()
-    if not t or t.lower() in ("ukendt", "unknown", "arvet"):
-        return None
-    if t.lower().startswith("bruger:"):
-        return None
-    if t.lower() in ("danny", "dna"):
-        return "Danny"
-    if t.lower() in ("helix", "hermes", "assistent"):
-        return "Helix"
-    # DNA 5. nov 2026: ALLE ANDRE ER DERES EGET NAVN. Sekretaeren hedder Su,
-    # Mr. X hedder Mr. X — ikke "agent" og ikke "ukendt".
-    alias = {
-        "sekretaer": "Su", "sekretær": "Su", "sue": "Su", "su": "Su",
-        "mr x": "Mr. X", "mr. x": "Mr. X", "xerxes": "Mr. X",
-        "mr-x": "Mr. X", "x": "Mr. X",
-    }
-    n = t.lower().replace("  ", " ").strip()
-    # DNA 5. nov 2026: en titel foran navnet hoerer ikke til sporet.
-    # "Sekretaer Su" er Su's spor, ikke "Sekretaer Su"'s.
-    for titel in ("sekretær ", "sekretaer ", "agent ", "fr. ", "hr. "):
-        if n.startswith(titel):
-            n = n[len(titel):].strip()
-            t = t[len(titel):].strip()
-    if n in alias:
-        return alias[n]
-    # Ellers: navnet som det staar.
-    return t[:40]
-
-
-def find_kategori(tekst: str, profil: str) -> str:
-    """Er dette TEKNISK viden eller PERSONLIG viden? (DNA 5. nov 2026)
-
-    To kategorier, og de skal kunne skilles ad, saa naeste gang vi taler om
-    teknik ved hjernen allerede hvad vi har talt om — og naar vi taler om et
-    menneske, blandes driftsarbejdet ikke ind.
-
-    Reglen er en simpel prioritering, ikke en model:
-      1. PERSONLIG vinder ALTID hvis sætningen handler om et menneske, et dyr,
-         en følelse, familien, hverdagen eller helbredet. "Danny har en hund
-         der hedder Blackie" er personlig, ogsaa selv om ordet "hedder" ogsaa
-         findes i teknikken.
-      2. TEKNISK naar teksten taler om maskiner, porte, kode, systemer,
-         værktøj og navngivne programmer — og ikke om et menneske.
-      3. Ellers ukendt. Vi gætter ikke.
-    """
-    t = (tekst or "")
-
-    person = PERSONLIG.search(t)
-    teknik = TEKNISK_ORD.search(t)
-
-    if person and not teknik:
-        return "PERSONLIG"
-    if person and teknik:
-        # Begge findes. DNA 5. nov 2026: navnet alene afgoer INTET — næsten alle
-        # sætninger indeholder "dna". Det er HANDLINGEN der afgør:
-        #   "Danny drikker kaffe"     -> personlig
-        #   "dna har brugt 5,8 GB"    -> teknisk
-        #   "Danny har en hund"       -> personlig
-        if HANDLING_PERSONLIG.search(t):
-            return "PERSONLIG"
-        return "TEKNISK"
-    if teknik:
-        return "TEKNISK"
-    return "UKENDT"
-
-
 def udtraek(tekst: str) -> dict:
     """Træk det ud af en tekst som mønstre kan finde. Resten ignoreres."""
     return {
@@ -608,27 +492,6 @@ def sikr_skema(con):
                 laest        timestamptz NOT NULL DEFAULT now()
             )
         """)
-        # DNA 5. nov 2026: TO KATEGORIER, kun i samtaleprofilen.
-        # TEKNISK eller PERSONLIG — saa tekniske samtaler og private samtaler
-        # ikke blandes, og naeste gang vi taler teknik ved hjernen hvad vi
-        # har talt om. Dokumenter har ingen kategori (NULL).
-        cur.execute("""
-            ALTER TABLE konklusion ADD COLUMN IF NOT EXISTS kategori text
-        """)
-        # DNA 5. nov 2026: TALEREN SOM KATEGORI. Samtaler skal deles op efter
-        # hvem der taler — Danny, Helix eller en navngivet person — saa mine
-        # egne ord aldrig blandes med DNA's. Ukendte er ikke en kategori.
-        cur.execute("""
-            ALTER TABLE konklusion ADD COLUMN IF NOT EXISTS taler text
-        """)
-        cur.execute("""
-            CREATE INDEX IF NOT EXISTS konklusion_taler_idx
-            ON konklusion (taler, oprettet DESC)
-        """)
-        cur.execute("""
-            CREATE INDEX IF NOT EXISTS konklusion_kategori_idx
-            ON konklusion (kategori, oprettet DESC)
-        """)
         con.commit()
 
 
@@ -638,8 +501,8 @@ def gem_konklusion(con, k: dict):
             INSERT INTO konklusion
               (emne, egenskab, vaerdi, form, bevis, regel, kilde_id,
                kilde_tekst, slags, sikkerhed, modsigelse_id, ejer,
-               dokument, side_deres, side_vores, gyldig_fra, kategori, taler)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+               dokument, side_deres, side_vores, gyldig_fra)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             ON CONFLICT (emne, egenskab, coalesce(vaerdi,''), coalesce(ejer,''),
                          coalesce(dokument,''), coalesce(side_vores,0),
                          coalesce(side_deres,''))
@@ -651,8 +514,6 @@ def gem_konklusion(con, k: dict):
             k.get("ejer") or EJER_STANDARD,
             k.get("dokument"), k.get("side_deres"), k.get("side_vores"),
             k.get("gyldig_fra"),
-            k.get("kategori"),
-            k.get("taler"),
         ))
         # Hændelsesstyring (DNA 2. nov 2026): sig til i samme sekund en
         # konklusion lander, så broen kan vågne med det samme i stedet for at
@@ -711,7 +572,7 @@ def regel_laeser(con, tekst, kilde_id, kilde_type, taler=None,
     # tekst tilbage i f["tekst"]; den gemmes i kilde_tekst, som er det felt
     # brugeren ser. emne/egenskab/vaerdi er kun til soegning og graf.
     # Taleren foelger med, saa "jeg" bliver til den der taler.
-    facts = laes(tekst, taler=taler, dokument=dokument, side=side)
+    facts = laes(tekst, taler=taler, dokument=dokument, side=side, ejer=ejer)
     n = 0
     for f in facts:
         gem_konklusion(con, {
@@ -723,14 +584,6 @@ def regel_laeser(con, tekst, kilde_id, kilde_type, taler=None,
             "regel": "laeser.ordret",
             "kilde_id": kilde_id,
             "kilde_tekst": f.get("tekst") or f["sats"],
-            # KATEGORI (DNA 5. nov 2026): TEKNISK eller PERSONLIG.
-            # KUN i samtaleprofilen — i et dokument er der ingen kategori,
-            # saa dokumentprofilen roeres ikke. Slags bevares for dokumenter.
-            # DNA 5. nov 2026: TALEREN. "jeg" blev allerede bundet til
-            # taleren; her gemmes hvem det var, saa samtalen deles op pr. person.
-            "taler": (taler_kategori(taler) if not f.get("dokument") else None),
-            "kategori": (find_kategori(f.get("tekst") or f["sats"], "samtale")
-                         if not f.get("dokument") else None),
             "slags": f.get("slags"),
             "dokument": f.get("dokument"),
             "side_deres": f.get("side_deres"),
@@ -1038,11 +891,7 @@ def udled(con, kilder, tael_samlet=False):
         ejer = rad[3] if len(rad) > 3 else ""
         _dok = rad[4] if len(rad) > 4 else None
         _side = rad[5] if len(rad) > 5 else None
-        # DNA 5. nov 2026: en kilde kan komme med 5 felter (uden tid), 6 med
-        # tid, eller 8 med taler. Tiden kendes paa at den er en dato — ikke paa
-        # sin plads. Ellers blev "Helix" laest som et tidspunkt.
-        _kilde_tid = rad[6] if len(rad) > 6 and not isinstance(rad[6], str) else None
-        _kilde_taler = rad[7] if len(rad) > 7 and isinstance(rad[7], str) else None
+        _kilde_tid = rad[6] if len(rad) > 6 else None
         tal["laest"] += 1
         if er_stoej(tekst):
             # Maskinvolapyk bliver aldrig en konklusion (DNA 2. nov 2026).
@@ -1069,16 +918,24 @@ def udled(con, kilder, tael_samlet=False):
         # skal have dokumentet med, ellers gaar "jeg" til Danny. Maalt: tre
         # saetninger i boernesagen blev til "Danny kan ikke tage hjem til
         # Danny selv", hvor det var en foraelders ord.
-        _taler = _kilde_taler or find_taler(tekst, _dok) or (f"bruger:{ejer}" if ejer and not _dok else "Ukendt")
+        _taler = find_taler(tekst, _dok, ejer) or (f"bruger:{ejer}" if ejer and not _dok else "Ukendt")
+        # DNA 2026-11-13: AI-ENS EGEN TALE ER IKKE VIDEN.
+        # Helix' egne svar blev gemt som konklusioner — "Du sagde fjern alle
+        # 164, men Danny stoppede for at rette drømmen først". Det er en
+        # opsummering af samtalen, ikke en kendsgerning om verden. Naeste
+        # model ville laese den som fakta. Kun menneskets ord og dokumenter
+        # maa blive hukommelse.
+        if not _dok and _taler in ("Helix", "Neo", "Ukendt", "ukendt"):
+            continue
         _dok_dato = laes_dokument_dato(tekst) if _dok else None
-        if _dok and len(rad) > 8 and rad[8]:
+        if _dok and len(rad) > 7 and rad[7]:
             # DNA 5. nov 2026: dokumentets ANTAL SIDER registreres som en
             # kendsgerning om dokumentet, ikke som en konklusion om verden.
             with con.cursor() as _c:
                 _c.execute("""
                     INSERT INTO dokument (navn, antal_sider) VALUES (%s, %s)
                     ON CONFLICT (navn) DO UPDATE SET antal_sider = EXCLUDED.antal_sider
-                """, (_dok, int(rad[8])))
+                """, (_dok, int(rad[7])))
                 _c.execute("""
                     UPDATE dokument SET
                       foerste_dato = LEAST(coalesce(foerste_dato, %s::date), %s::date),
@@ -1125,8 +982,14 @@ class Handler(BaseHTTPRequestHandler):
 
         if p.path == "/status":
             with self.con.cursor() as cur:
-                cur.execute("SELECT count(*), count(DISTINCT emne) FROM konklusion")
-                k, e = cur.fetchone()
+                # DNA 2026-11-13: tallet skal vise hvad AI'en FAAR — ikke hvor
+                # mange raekker der ligger i alt. De ugyldige taelles med i
+                # "kasseret", saa man kan se oprydningen.
+                cur.execute("""SELECT count(*) FILTER (WHERE NOT ugyldig),
+                                      count(DISTINCT emne) FILTER (WHERE NOT ugyldig),
+                                      count(*) FILTER (WHERE ugyldig)
+                               FROM konklusion""")
+                k, e, kasseret = cur.fetchone()
                 cur.execute("SELECT count(*) FROM forstaaelse_register WHERE status='NY'")
                 r = cur.fetchone()[0]
                 cur.execute("""
@@ -1135,6 +998,7 @@ class Handler(BaseHTTPRequestHandler):
                 b = dict(cur.fetchall())
             return self._json({
                 "konklusioner": k, "emner": e,
+                "kasseret": kasseret,
                 "uforstaaet_i_register": r,
                 "bevis": b,
                 "kilder": "se /kilder",
@@ -1161,7 +1025,9 @@ class Handler(BaseHTTPRequestHandler):
             with self.con.cursor() as cur:
                 cur.execute("""
                     SELECT emne, egenskab, vaerdi, form, bevis, regel, oprettet
-                    FROM konklusion ORDER BY oprettet DESC LIMIT %s
+                    FROM konklusion
+                    WHERE NOT ugyldig
+                    ORDER BY oprettet DESC LIMIT %s
                 """, (gr,))
                 return self._json({"konklusioner": [
                     {"emne": r[0], "egenskab": r[1], "vaerdi": r[2],
@@ -1200,7 +1066,7 @@ class Handler(BaseHTTPRequestHandler):
             kilder = [
                 (k.get("id", f"kilde-{i}"), k["tekst"], k.get("type", "ukendt"),
                  k.get("ejer", ""), k.get("dokument"), k.get("side"),
-                 k.get("taler"), None, k.get("antal_sider"))
+                 None, k.get("antal_sider"))
                 for i, k in enumerate(data.get("kilder", []))
             ]
             if not kilder:

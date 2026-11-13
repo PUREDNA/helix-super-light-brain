@@ -727,12 +727,22 @@ async function loadDataset(url, ds, hentetekst) {
 async function loadGraph() {
   loadPrefs(); // genopret gemte valg (skjulte kategorier, kanter, løse, mode)
   aktivHjerne = 'AG';
-  await loadDataset('api/graph', 'hjerne', 'Henter graf AG...');
+  await loadDataset('api/graph?x=1' + _ejerQ(), 'hjerne', 'Henter graf AG...');
 }
 
 // KONTORET (DNA 4. nov 2026): én brugers egne konklusioner.
 // Aabnes fra OpenWebUI med ?ejer=<brugerens id>. Uden ?ejer vises grafen
 // som foer — saa DNA's egen viewer er uaendret.
+
+// DNA 11. nov 2026: KONTORET ER GRAENSEN. Alle kald til vieweren baerer
+// brugerens ejer-id, saa en bruger i OpenWebUI kun ser sit eget kontor.
+// DNA's eget id er standard — hans egen viewer aabnes uden parameter.
+const DNA_EJER = '99a107f4-b20e-468b-9b9e-a019c23c196e';
+function _ejerQ() {
+  const e = new URLSearchParams(location.search).get('ejer') || DNA_EJER;
+  return '&ejer=' + encodeURIComponent(e);
+}
+
 async function loadKontor() {
   loadPrefs();
   aktivHjerne = 'KONTOR';
@@ -1514,7 +1524,7 @@ async function showSelected(n) {
       if (aktivHjerne === 'OPS') {
         nb = naboerLokalt(n);
       } else {
-        const res = await fetch('api/neighbors?id=' + encodeURIComponent(n.id));
+        const res = await fetch('api/neighbors?id=' + encodeURIComponent(n.id) + _ejerQ());
         nb = await res.json();
       }
       let ovTxt = '';
@@ -2087,7 +2097,7 @@ async function showSelected(n) {
     if (aktivHjerne === 'OPS') {
       neigh = naboerLokalt(n);
     } else {
-      const res = await fetch('api/neighbors?id=' + encodeURIComponent(n.id));
+      const res = await fetch('api/neighbors?id=' + encodeURIComponent(n.id) + _ejerQ());
       neigh = await res.json();
     }
     if (!neigh || !neigh.match || !neigh.nodes || neigh.nodes.length <= 1) {
@@ -2355,7 +2365,7 @@ function applyFilter(q) {
       if (aktivHjerne === 'OPS') {
         sdata = søgLokalt(q);
       } else {
-        const res = await fetch('api/search?q=' + encodeURIComponent(q));
+        const res = await fetch('api/search?q=' + encodeURIComponent(q) + _ejerQ());
         if (!res.ok) throw new Error('HTTP ' + res.status);
         sdata = await res.json();
       }
