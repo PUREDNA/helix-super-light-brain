@@ -500,9 +500,9 @@ def gem_konklusion(con, k: dict):
         cur.execute("""
             INSERT INTO konklusion
               (emne, egenskab, vaerdi, form, bevis, regel, kilde_id,
-               kilde_tekst, slags, sikkerhed, modsigelse_id, ejer,
+               kilde_tekst, slags, sikkerhed, modsigelse_id, ejer, agent,
                dokument, side_deres, side_vores, gyldig_fra)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             ON CONFLICT (emne, egenskab, coalesce(vaerdi,''), coalesce(ejer,''),
                          coalesce(dokument,''), coalesce(side_vores,0),
                          coalesce(side_deres,''))
@@ -512,6 +512,11 @@ def gem_konklusion(con, k: dict):
             k["regel"], k.get("kilde_id"), k["kilde_tekst"],
             k.get("slags"), k.get("sikkerhed"), k.get("modsigelse_id"),
             k.get("ejer") or EJER_STANDARD,
+            # DNA 2026-11-13: hvilken AI udledte konklusionen. En AI er en
+            # bruger paa lige fod med et menneske — Helix, Super Mario,
+            # Asgers detektiv har hver sit ID. Skifter brugeren model,
+            # fortsaetter konklusionerne under den nye models ID.
+            k.get("agent") or "helix",
             k.get("dokument"), k.get("side_deres"), k.get("side_vores"),
             k.get("gyldig_fra"),
         ))

@@ -362,7 +362,14 @@ def main() -> int:
             with psycopg.connect(dsn, autocommit=True) as lyt:
                 lyt.execute("LISTEN ny_konklusion")
                 while True:
-                    with psycopg.connect(dsn) as fb:
+                    # DNA 2026-11-13: autocommit paa forbindelsen.
+                    # Foer aabnede en SELECT en transaktion der blev haengende i
+                    # "idle in transaction" hvis noget gik galt midt i. En
+                    # saadan laas blokerede hele tabellen i 28 minutter, saa
+                    # hverken motoren eller en ALTER TABLE kom igennem.
+                    # Broen laeser og skriver i enkelte saetninger — den har
+                    # ikke brug for en samlet transaktion.
+                    with psycopg.connect(dsn, autocommit=True) as fb:
                         tal = koer_igennem(fb, a.parti, a.vis)
                     if a.engangs:
                         print(f"[bro] faerdig: {tal}")
