@@ -25,9 +25,12 @@ import urllib.request
 from agent.context_engine import ContextEngine
 
 HJERNE = os.environ.get("LILLEHJERNE", "http://127.0.0.1:6302")
-NED_TIL = float(os.environ.get("HELIX_COMPRESS_NED_TIL", "0.65"))
+NED_TIL = float(os.environ.get("HELIX_COMPRESS_NED_TIL", "0.60"))
 TÆRSKEL = float(os.environ.get("HELIX_COMPRESS_TÆRSKEL", "0.90"))
 LÅS = threading.Lock()   # to ture må ikke tømme samme historik samtidig
+
+# DNA 9. nov: broen tager ALT fra Hermes' hukommelse — samtale OG memory-filerne.
+MEMORY_FILER = ("MEMORY.md", "USER.md")
 
 
 def _rens(tekst: str) -> str:
@@ -114,6 +117,40 @@ class HelixCompression(ContextEngine):
         svar = json.loads(urllib.request.urlopen(req, timeout=120).read())
         return len(kilder), json.dumps(svar, ensure_ascii=False)
 
+    def _flyt_memory(self) -> tuple[int, str]:
+        """Flyt MEMORY.md og USER.md råt til Lillehjernen.
+
+        DNA 9. nov: broen tager ALT fra Hermes' hukommelse. Korttidshukommelsen
+        (memory-filerne) må ikke blive hængende i Hermes — den skal ind i hjernen.
+        """
+        rod = os.environ.get("HERMES_MEMORY_DIR", os.path.expanduser("~/.hermes/memories"))
+        kilder = []
+        for navn in MEMORY_FILER:
+            sti = os.path.join(rod, navn)
+            if not os.path.exists(sti):
+                continue
+            try:
+                with open(sti, encoding="utf-8") as f:
+                    tekst = f.read().strip()
+            except OSError:
+                continue
+            if len(tekst) < 40:
+                continue
+            kilder.append({
+                "id": f"memory-{navn.split('.')[0].lower()}",
+                "tekst": tekst,
+                "type": "samtale",
+                "ejer": "hermes",
+                "taler": "Danny",   # fakta om DNA, sagt af DNA
+            })
+        if not kilder:
+            return 0, "ingen memory-filer"
+        krop = json.dumps({"kilder": kilder}).encode()
+        req = urllib.request.Request(HJERNE + "/udled", data=krop,
+                                     headers={"Content-Type": "application/json"})
+        svar = json.loads(urllib.request.urlopen(req, timeout=120).read())
+        return len(kilder), json.dumps(svar, ensure_ascii=False)
+
     def compress(self, messages, current_tokens=None, focus_topic=None,
                  force=False, memory_context=""):
         msgs = list(messages or [])
@@ -153,6 +190,15 @@ class HelixCompression(ContextEngine):
                     n, svar = self._flyt(flyttes)
                 except Exception as e:  # noqa: BLE001 — samtalen må ikke gå i stå
                     svar = f"FEJL: {e}"
+
+            # DNA 9. nov: memory-filerne følger med i samme tømning.
+            mn, msvar = 0, ""
+            try:
+                mn, msvar = self._flyt_memory()
+                if mn:
+                    svar = f"{svar} · memory: {mn} filer"
+            except Exception as e:  # noqa: BLE001
+                svar = f"{svar} · memory-FEJL: {e}"
 
             self.compression_count += 1
             self.sidste_rapport = f"flyttede {n} beskeder — {svar}"
