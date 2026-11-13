@@ -107,8 +107,14 @@ class HelixCompression(ContextEngine):
             rolle = m.get("role", "")
             if rolle not in ("user", "assistant"):
                 continue
+            # DNA 2026-11-13: AI-ENS EGNE SVAR MAA IKKE BLIVE HUKOMMELSE.
+            # Foer blev de flyttet ind som "samtale-assistent" uden taler, og
+            # motoren gemte dem som fakta. Saa laeste jeg mine egne forklaringer
+            # som om de var DNA's viden. Kun menneskets ord flyttes nu.
+            if rolle == "assistant":
+                continue
             kilder.append({"id": f"hist-{i}", "tekst": tekst,
-                           "type": "samtale" if rolle == "user" else "samtale-assistent"})
+                           "type": "samtale", "taler": "Danny"})
         if not kilder:
             return 0, "intet at flytte"
         krop = json.dumps({"kilder": kilder}).encode()

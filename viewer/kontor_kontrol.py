@@ -28,11 +28,13 @@ def tjek(navn, ok, detalje=""):
 
 
 def main():
-    # 1. Grafen: Asger maa ikke se DNA's knuder
+    # 1. Grafen: Asger maa ikke se DNA's knuder — men han maa gerne se SINE EGNE.
     a_graf = hent(f"/api/graph?x=1&ejer={ASGER}")
     d_graf = hent(f"/api/graph?x=1&ejer={DNA}")
-    tjek("Asgers graf er tom (ingen hovedbygning)", len(a_graf["nodes"]) == 0,
-         f"{len(a_graf['nodes'])} noder")
+    andres = [n for n in a_graf["nodes"]
+              if (n.get("props") or {}).get("ejer") not in ("", ASGER)]
+    tjek("Asger ser ikke DNA's knuder i sin graf", not andres,
+         f"{len(andres)} fremmede af {len(a_graf['nodes'])}")
     tjek("DNA's graf har knuder", len(d_graf["nodes"]) > 0,
          f"{len(d_graf['nodes'])} noder")
 
