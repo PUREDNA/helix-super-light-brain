@@ -23,6 +23,40 @@ from agent.memory_provider import MemoryProvider
 HJERNE = os.environ.get("LILLEHJERNE", "http://127.0.0.1:6302")
 MOTOR = os.environ.get("LILLEHJERNE_MOTOR", "http://127.0.0.1:6305")
 
+def _model_navn() -> str:
+    """Hvilken AI foerer samtalen? Modellens eget navn, ikke et fast.
+
+    DNA 2026-11-15: hver model er en bruger paa lige fod med et menneske.
+    Bruger nogen Super Mario, skal hans konklusioner ikke staa som Helix'.
+    Er navnet ikke sat, staar der "agent" — aldrig et tilfaeldigt navn.
+    """
+    return (os.environ.get("HELIX_AGENT_NAVN")
+            or os.environ.get("HERMES_AGENT_NAME")
+            or "agent").strip()
+
+
+def _navn_for(ejer: str) -> str:
+    """Slaa brugerens navn op — der maa ikke staa et fast navn i containeren.
+
+    DNA 2026-11-15: deles containeren med 250 mennesker, skal hver af dem se
+    deres eget navn. Bruger-id'et er noeglen.
+    """
+    if not ejer or ejer.startswith("bruger:"):
+        return "ukendt"
+    try:
+        import psycopg
+        dsn = os.environ.get(
+            "LILLEHJERNE_OW_DSN",
+            "host=127.0.0.1 port=5432 dbname=helix_main_db user=hjerne password=skift-mig")
+        with psycopg.connect(dsn) as con, con.cursor() as cur:
+            cur.execute('SELECT name FROM public."user" WHERE id = %s LIMIT 1',
+                        (ejer,))
+            r = cur.fetchone()
+        return ((r[0] or "").strip() or "ukendt") if r else "ukendt"
+    except Exception:
+        return "ukendt"
+
+
 
 def _hent(sti: str, timeout: int = 5) -> dict:
     try:
@@ -116,10 +150,10 @@ class HelixSuperLightBrain(MemoryProvider):
             "type": "samtale",
             "tekst": user_content.strip()[:8000],
             "ejer": ejer,
-            # DNA 5. nov 2026: TALEREN SKAL MED. Samtaler deles op efter hvem
-            # der taler — Danny, Helix eller en navngivet person — saa mine egne
-            # ord aldrig blandes med hans. Uden dette felt gættede motoren.
-            "taler": "Danny",
+            # DNA 2026-11-15: TALEREN KOMMER FRA BRUGEREN — ikke et fast navn.
+            # Foer stod "Danny" hardkodet, saa hans navn dukkede op i enhver
+            # anden brugers hjerne.
+            "taler": _navn_for(ejer),
         }]
         # Assistentens svar er IKKE en konklusion om DNA, men det er en
         # konklusion om MIG (DNA 5. nov 2026: "i Helix har du både en privat
@@ -130,7 +164,9 @@ class HelixSuperLightBrain(MemoryProvider):
                 "type": "samtale",
                 "tekst": assistant_content.strip()[:8000],
                 "ejer": ejer,
-                "taler": "Helix",
+                # DNA 2026-11-15: AI-ENS NAVN ER MODELLENS — ikke "Helix".
+                # Kalder nogen deres model Super Mario, staar der Super Mario.
+                "taler": _model_navn(),
             })
         _send(kilder)
 

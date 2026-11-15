@@ -24,6 +24,18 @@ HJERNE = os.environ.get("LILLEHJERNE", "http://127.0.0.1:6302")
 MOTOR = os.environ.get("LILLEHJERNE_MOTOR", "http://127.0.0.1:6305")
 
 
+def _model_navn() -> str:
+    """Hvilken AI foerer samtalen? Modellens eget navn, ikke et fast.
+
+    DNA 2026-11-15: hver model er en bruger paa lige fod med et menneske.
+    Bruger nogen Super Mario, skal hans konklusioner ikke staa som Helix'.
+    Er navnet ikke sat, staar der "agent" — aldrig et tilfaeldigt navn.
+    """
+    return (os.environ.get("HELIX_AGENT_NAVN")
+            or os.environ.get("HERMES_AGENT_NAME")
+            or "agent").strip()
+
+
 def _navn_for(ejer: str) -> str:
     """Slå brugerens navn op i OpenWebUI's brugertabel.
 
@@ -154,7 +166,9 @@ class HelixSuperLightBrain(MemoryProvider):
                 "type": "samtale",
                 "tekst": assistant_content.strip()[:8000],
                 "ejer": ejer,
-                "taler": "Helix",
+                # DNA 2026-11-15: AI-ENS NAVN ER MODELLENS — ikke "Helix".
+                # Kalder nogen deres model Super Mario, staar der Super Mario.
+                "taler": _model_navn(),
             })
         _send(kilder)
 
