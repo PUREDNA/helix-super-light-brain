@@ -437,6 +437,17 @@ def sikr_skema(con):
         cur.execute("""
             ALTER TABLE konklusion ADD COLUMN IF NOT EXISTS modsigelse_id uuid
         """)
+        # DNA 2026-11-15: agent-kolonnen kom til 13. nov, men blev kun lagt ind
+        # i DNA's egen database i hånden — en FRISK installation fik den aldrig
+        # og kastede "column agent does not exist" ved foerste gemning.
+        # Nu oprettes den her, saa enhver installation faar den.
+        cur.execute("""
+            ALTER TABLE konklusion ADD COLUMN IF NOT EXISTS agent text DEFAULT ''
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS konklusion_agent_idx
+            ON konklusion (agent) WHERE agent <> ''
+        """)
         cur.execute("""
             CREATE INDEX IF NOT EXISTS konklusion_modsigelse_idx
             ON konklusion (modsigelse_id) WHERE modsigelse_id IS NOT NULL

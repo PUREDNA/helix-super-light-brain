@@ -62,8 +62,15 @@ COPY enricher/           /opt/lillehjerne/enricher/
 COPY ops/                /opt/lillehjerne/ops/
 COPY npll/               /opt/lillehjerne/npll/
 COPY odin/               /opt/lillehjerne/odin/
-COPY stemme/             /opt/lillehjerne/stemme/
+# DNA 2026-11-15: 'stemme/' har aldrig vaeret i repoet (mappen var tom i
+# arbejdskopien). Linjen fik hver FRISK installation til at fejle med
+# 'failed to calculate checksum: "/stemme": not found'.
 COPY initdb/             /opt/lillehjerne/initdb/
+# DNA 2026-11-15: FRISK INSTALLATION. Den officielle Postgres-entrypoint
+# koerer kun filer i /docker-entrypoint-initdb.d naar data-mappen er tom.
+# Foer laa filerne kun i /opt/lillehjerne/initdb, hvor ingen laeste dem —
+# en ny container fik hverken AGE eller vector, og cypher() manglede.
+COPY initdb/             /docker-entrypoint-initdb.d/
 COPY scripts/            /opt/lillehjerne/scripts/
 RUN mkdir -p /opt/lillehjerne/ollama /opt/lillehjerne/modeller \
  && chmod +x /opt/lillehjerne/scripts/*.sh \

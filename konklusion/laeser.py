@@ -875,13 +875,15 @@ def _ordrette(tekst: str, doc, taler: str | None,
         # DNA 5. nov 2026: der kraeves IKKE et verbum. "Handling har
         # konsekvens" faldt ud her og blev derefter skaaret i stykker af
         # det gamle moenster. Saetningen er konklusionen — punktum.
-        fund.append(_en_konklusion(raw, taler, sent, dokument, side))
+        fund.append(_en_konklusion(raw, taler, sent, dokument, side,
+                                     lytter_navn=lytter_navn))
     return [f for f in fund if f]
 
 
 def _en_konklusion(raw: str, taler: str | None, sent,
                    dokument: str | None = None, side: int | None = None,
-                   slags: str | None = None) -> dict | None:
+                   slags: str | None = None,
+                   lytter_navn: str | None = None) -> dict | None:
     """Byg ét fund ud af ÉN saetning — teksten bevares ordret."""
     navn = taler or "Ukendt"
     tekst = raw

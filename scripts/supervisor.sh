@@ -3,7 +3,7 @@
 #  HELIX SUPER BRAIN — supervisor
 #  Starter begge motorer i ÉN container og holder dem i live.
 #
-#  1. PostgreSQL 17  (hjernen)
+#  1. PostgreSQL 18  (hjernen)
 #  3. NPLL-scorer    (dømmekraften, valgfri — kan slås fra)
 #
 #  Alt uden data i image'et. Data lever i de monterede volumes.
@@ -273,7 +273,7 @@ start_indre_ollama || true
 # ---------- 1. PostgreSQL ----------
 # pgaudit skal indlæses via shared_preload_libraries — det kan ikke gøres i
 # et init-script. Vi sender det som et server-argument ved opstart.
-log "starter PostgreSQL 17 ..."
+log "starter PostgreSQL 18 ..."
 /usr/local/bin/docker-entrypoint.sh postgres -c shared_preload_libraries=pgaudit,age &
 PG_PID=$!
 
