@@ -35,12 +35,12 @@ except ImportError:
 
 PORT = int(os.environ.get("KONKLUSION_PORT", "6305"))
 
-# Hvem ejer en konklusion uden en angivet ejer? DNA's egen konto i OpenWebUI
-# (målt 2. nov 2026). Alt uden ejer er hans — en gæst må aldrig se det.
-EJER_STANDARD = os.environ.get(
-    "KONKLUSION_EJER_STANDARD",
-    "99a107f4-b20e-468b-9b9e-a019c23c196e",
-)
+# DNA 2026-11-15: INGEN FAST EJER.
+# Foer stod DNA's eget bruger-id her som standard. Alt uden angivet ejer blev
+# hans — saa en fremmed brugers konklusioner landede i DNA's hovedbygning.
+# Deler man containeren med 250 mennesker, maa intet havne hos nogen som helst
+# ved et uheld. Er ejeren ukendt, staar der "ukendt" — ikke et navn eller et id.
+EJER_STANDARD = os.environ.get("KONKLUSION_EJER_STANDARD", "ukendt")
 DSN = os.environ.get(
     "KONKLUSION_DSN",
     "host=127.0.0.1 port=5432 dbname=hjerne user=hjerne password=skift-mig",
@@ -419,9 +419,15 @@ def sikr_skema(con):
         cur.execute("""
             ALTER TABLE konklusion ADD COLUMN IF NOT EXISTS ejer text
         """)
-        cur.execute("""
-            UPDATE konklusion SET ejer = %s WHERE ejer IS NULL
-        """, (EJER_STANDARD,))
+        # DNA 2026-11-15: KUN naar der er en RIGTIG standard-ejer.
+        # Foer skrev denne linje DNA's id paa alle raekker uden ejer ved hver
+        # opstart. Skifter man standarden til "ukendt", ville den overskrive
+        # en eksisterende installations data. Derfor: kun hvis EJER_STANDARD
+        # er et rigtigt bruger-id, aldrig "ukendt".
+        if EJER_STANDARD and EJER_STANDARD != "ukendt":
+            cur.execute("""
+                UPDATE konklusion SET ejer = %s WHERE ejer IS NULL
+            """, (EJER_STANDARD,))
         cur.execute("""
             CREATE INDEX IF NOT EXISTS konklusion_ejer_idx
             ON konklusion (ejer, oprettet DESC)

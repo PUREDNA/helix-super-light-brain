@@ -6,12 +6,13 @@ bruger kan se en andens data.
     python3 kontor_kontrol.py
 """
 import json
+import os
 import sys
 import urllib.request
 
 VIEWER = "http://127.0.0.1:6301"
-DNA = "99a107f4-b20e-468b-9b9e-a019c23c196e"
-ASGER = "31f0d673-9d42-425d-9e5c-c5ef07b42c98"
+DNA = os.environ.get("TEST_DNA_ID", "")   # saet TEST_DNA_ID for at teste kontor
+ASGER = os.environ.get("TEST_ANDEN_BRUGER_ID", "")
 
 fejl = []
 
@@ -28,6 +29,11 @@ def tjek(navn, ok, detalje=""):
 
 
 def main():
+    if not (DNA and ASGER):
+        print("SPRINGET OVER: saet TEST_DNA_ID og TEST_ANDEN_BRUGER_ID for at "
+              "teste kontor-opdelingen paa din egen installation.")
+        return
+
     # 1. Grafen: Asger maa ikke se DNA's knuder — men han maa gerne se SINE EGNE.
     a_graf = hent(f"/api/graph?x=1&ejer={ASGER}")
     d_graf = hent(f"/api/graph?x=1&ejer={DNA}")
