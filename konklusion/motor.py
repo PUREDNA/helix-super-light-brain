@@ -550,6 +550,25 @@ def gem_uforstaaet(con, kilde_id, tekst, grund, kilde_type):
 
 # ---------------------------------------------------------------- regler
 
+def _navn_for(con, ejer: str | None) -> str | None:
+    """Slå brugerens navn op i OpenWebUI's brugertabel.
+
+    DNA 2026-11-15: der maa ikke staa et fast navn nogen steder i containeren.
+    Deler man den med 250 mennesker, skal hver af dem se deres eget navn.
+    Bruger-id'et er noeglen; navnet er svaret.
+    """
+    if not ejer or ejer.startswith("bruger:"):
+        return None
+    try:
+        with con.cursor() as cur:
+            cur.execute("""SELECT name FROM helix_main_db.public."user"
+                           WHERE id = %s LIMIT 1""", (ejer,))
+            r = cur.fetchone()
+        return ((r[0] or "").strip() or None) if r else None
+    except Exception:
+        return None
+
+
 def regel_laeser(con, tekst, kilde_id, kilde_type, taler=None,
                  dokument=None, side=None, ejer=None, kilde_tid=None,
                  dokument_dato=None):
@@ -577,7 +596,12 @@ def regel_laeser(con, tekst, kilde_id, kilde_type, taler=None,
     # tekst tilbage i f["tekst"]; den gemmes i kilde_tekst, som er det felt
     # brugeren ser. emne/egenskab/vaerdi er kun til soegning og graf.
     # Taleren foelger med, saa "jeg" bliver til den der taler.
-    facts = laes(tekst, taler=taler, dokument=dokument, side=side, ejer=ejer)
+    # DNA 2026-11-15: navnet paa den bruger hvis kontor det er — slaas op,
+    # hardcodes ikke. Er der ingen ejer, bliver navnet None og "du"/"jeg"
+    # staar som de blev sagt.
+    lytter = _navn_for(con, ejer) if ejer else None
+    facts = laes(tekst, taler=taler, dokument=dokument, side=side, ejer=ejer,
+                 navn=lytter)
     n = 0
     for f in facts:
         gem_konklusion(con, {
@@ -923,7 +947,7 @@ def udled(con, kilder, tael_samlet=False):
         # skal have dokumentet med, ellers gaar "jeg" til Danny. Maalt: tre
         # saetninger i boernesagen blev til "Danny kan ikke tage hjem til
         # Danny selv", hvor det var en foraelders ord.
-        _taler = find_taler(tekst, _dok, ejer) or (f"bruger:{ejer}" if ejer and not _dok else "Ukendt")
+        _taler = find_taler(tekst, _dok, ejer, _navn_for(con, ejer)) or (f"bruger:{ejer}" if ejer and not _dok else "Ukendt")
         # DNA 2026-11-13: AI-ENS EGEN TALE ER IKKE VIDEN.
         # Helix' egne svar blev gemt som konklusioner — "Du sagde fjern alle
         # 164, men Danny stoppede for at rette drømmen først". Det er en

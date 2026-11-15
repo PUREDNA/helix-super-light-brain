@@ -391,41 +391,45 @@ def _brugbart(navn: str, tok=None) -> bool:
     return True
 
 
-# DNA's eget OpenWebUI-bruger-id. Kun denne ejer maa faa "Danny" som taler
-# naar beskeden ikke baerer et stemmemaerke (DNA 11. nov 2026).
-DANNY_EJER = "99a107f4-b20e-468b-9b9e-a019c23c196e"
+# DNA 2026-11-15: INGEN FAST NAVN I KODEN.
+# Før stod her DNA's eget bruger-id og navnet "Danny" hardkodet. Det betød at
+# enhver der delte containeren fik "Danny" som standard — hans navn dukkede op
+# i en andens hjerne. Nu slås navnet op i den ejer der spørger: bruger-id'et
+# er nøglen, og navnet hentes fra OpenWebUI's brugertabel. Er der ingen ejer,
+# er svaret "ukendt" — ikke et tilfældigt navn.
 
 
 def find_taler(tekst: str, dokument: str | None = None,
-               ejer: str | None = None) -> str | None:
+               ejer: str | None = None, navn: str | None = None) -> str | None:
     """Hvem siger dette? Læs stemmegenkendelsens mærke, gæt ikke.
 
     DNA 3. nov 2026: beskeden kommer med et mærke i begyndelsen —
     '[taler: Danny (0.87, telefon)]' eller '[taler: ukendt]'. Det er den
-    VEJVISER der afgør hvad "jeg" peger på. Uden mærket (skrevet besked)
-    er det DNA selv, fordi det er hans samtale.
+    VEJVISER der afgør hvad "jeg" peger på.
 
     DNA 5. nov 2026: DEN REGEL GAELDER KUN I SAMTALEN. I et dokument maa
-    "jeg" ALDRIG blive til Danny — dokumentet er skrevet af hvem som helst
+    "jeg" ALDRIG blive til et navn — dokumentet er skrevet af hvem som helst
     (mor, sagsbehandler, en advokat), og der staar aldrig et talermærke i
-    en PDF. Uden denne graense blev "jeg kan ikke tage hjem til min dreng"
-    til "Danny kan ikke tage hjem til Danny selv" (maalt 3 steder i sagen).
+    en PDF.
+
+    DNA 15. nov 2026: BRUGEREN ER NAVNET. `navn` kommer fra den ejers
+    brugertabel der spørger. Er det "Danny"s id, staar der Danny; er det
+    Lottes, staar der Lotte. Der er ingen fast standard.
     """
     m = re.search(r"\[taler:\s*([^\]\(,]+)", tekst or "", re.I)
     if m:
-        navn = m.group(1).strip()
-        if not navn or navn.lower() in ("ukendt", "unknown", "arvet"):
-            return None     # vi ved ikke hvem — gæt ikke
-        return navn
-    # INTET MAERKE: kun i samtalen er det DNA — og kun naar ejeren ER DNA.
-    # DNA 11. nov 2026: Asger skriver i OpenWebUI uden stemmemaerke. Reglen
-    # gjorde hans 264 saetninger til "Danny siger", saa hans research forurenede
-    # DNA's egne konklusioner. En fremmed ejer faar sit eget navn som taler.
+        merke = m.group(1).strip()
+        if merke and merke.lower() not in ("ukendt", "unknown", "arvet"):
+            return merke
+        return None     # vi ved ikke hvem — gæt ikke
     if dokument:
         return None
-    if ejer and ejer != DANNY_EJER:
+    # INTET MAERKE: taleren er den bruger hvis kontor det er.
+    if navn and navn.strip():
+        return navn.strip()
+    if ejer:
         return f"bruger:{ejer}"
-    return "Danny"          # ingen stemme i beskeden = skrevet af DNA
+    return "ukendt"
 
 
 # PAPIRE-FILTERET (DNA 4. nov 2026)
@@ -711,7 +715,7 @@ def profil_for(dokument: str | None) -> str:
 
 def laes(tekst: str, taler: str | None = None,
          dokument: str | None = None, side: int | None = None,
-         ejer: str | None = None) -> list[dict]:
+         ejer: str | None = None, navn: str | None = None) -> list[dict]:
     """Laes en tekst og returnér de saetninger der ER konklusioner.
 
     DNA 4. nov 2026 — denne regel erstatter den gamle der splittede saetningen
@@ -737,7 +741,7 @@ def laes(tekst: str, taler: str | None = None,
     nlp = _model()
     if nlp is None:
         # Uden spaCy kan vi ikke dele i saetninger. Tag hele teksten ordret.
-        return _ordrette(tekst, None, taler, dokument, side)
+        return _ordrette(tekst, None, taler, dokument, side, navn)
 
     if taler is None:
         # DNA 5. nov 2026: taleren afgoeres i den rigtige profil. I et dokument
@@ -783,13 +787,14 @@ def laes(tekst: str, taler: str | None = None,
         doc = nlp(renset)
     except Exception as e:
         print(f"[laeser] spaCy fejlede: {e}", flush=True)
-        return _emne_fund + _ordrette(tekst, None, taler, dokument, side)
+        return _emne_fund + _ordrette(tekst, None, taler, dokument, side, navn)
 
-    return _emne_fund + _ordrette(tekst, doc, taler, dokument, side)
+    return _emne_fund + _ordrette(tekst, doc, taler, dokument, side, navn)
 
 
 def _ordrette(tekst: str, doc, taler: str | None,
-              dokument: str | None = None, side: int | None = None) -> list[dict]:
+              dokument: str | None = None, side: int | None = None,
+              lytter_navn: str | None = None) -> list[dict]:
     """Del i saetninger og behold hver saetning ORDRET.
 
     Kun "jeg/mig/min/mit/mine" aendres til talerens navn — og kun naar vi ved
@@ -923,12 +928,14 @@ def _en_konklusion(raw: str, taler: str | None, sent,
         tekst = re.sub(r"\b(jeg|mig|min|mit|mine)\b", navn, raw, flags=re.I)
 
     # DNA 5. nov 2026: DEN DER TALER OG DEN DER LYTTES TIL.
-    # Naar det er MIG der siger saetningen, er "du" Danny — ikke mig selv.
-    # MEN: naar det er DNA der taler, betyder "du" Helix, og den skal staa.
-    # Kun naar taleren er en anden end Danny maa "du" blive til Danny.
-    if (navn.lower() not in ("danny", "dna", "ukendt")
-            and sent is not None):
-        tekst = re.sub(r"\b(du|dig|din|dit|dine)\b", "Danny", tekst, flags=re.I)
+    # Naar en anden end brugeren siger saetningen, er "du" brugeren.
+    #
+    # DNA 15. nov 2026: HVEM "DU" ER KOMMER FRA BRUGEREN — ikke fra et fast
+    # navn. Foer blev "du" altid til "Danny", saa en anden brugers hjerne
+    # skrev hans navn. `lytter_navn` er den ejer hvis kontor det er; findes
+    # den ikke, staar "du" som det blev sagt.
+    if lytter_navn and navn.lower() not in (lytter_navn.lower(), "dna", "ukendt"):
+        tekst = re.sub(r"\b(du|dig|din|dit|dine)\b", lytter_navn, tekst, flags=re.I)
         # ...og kun i den saetning hvor DNA faktisk bliver talt TIL.
         # "Jeg vil gerne have" har ingen "du" — den skal staa urørt.
 

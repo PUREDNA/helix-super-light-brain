@@ -25,6 +25,49 @@ import urllib.request
 from agent.context_engine import ContextEngine
 
 HJERNE = os.environ.get("LILLEHJERNE", "http://127.0.0.1:6302")
+
+
+def _navn_for(ejer: str) -> str:
+    """Slå brugerens navn op — der maa ikke staa et fast navn i containeren.
+
+    DNA 2026-11-15: deles containeren med 250 mennesker, skal hver af dem se
+    deres eget navn i hukommelsen. Bruger-id'et er noeglen.
+    """
+    if not ejer or ejer in ("hermes", "kanban:dispatcher") or ejer.startswith("bruger:"):
+        # Agenter og systemroller har ikke et menneskenavn i brugertabellen.
+        return ejer or "ukendt"
+    try:
+        import psycopg
+        dsn = os.environ.get(
+            "LILLEHJERNE_OW_DSN",
+            "host=127.0.0.1 port=5432 dbname=helix_main_db user=hjerne password=skift-mig")
+        with psycopg.connect(dsn) as con, con.cursor() as cur:
+            cur.execute('SELECT name FROM public."user" WHERE id = %s LIMIT 1',
+                        (ejer,))
+            r = cur.fetchone()
+        return ((r[0] or "").strip() or "ukendt") if r else "ukendt"
+    except Exception:
+        return "ukendt"
+
+
+def _ejer_for_session() -> str:
+    """Hvilken bruger hører denne session til?
+
+    Henter bruger-id'et fra Hermes' egen state-database for den kørende
+    session. Findes det ikke, er ejeren ukendt — aldrig et fast navn.
+    """
+    sid = os.environ.get("HERMES_SESSION_ID", "")
+    if not sid:
+        return ""
+    try:
+        import sqlite3
+        p = os.path.expanduser("~/.hermes/state.db")
+        with sqlite3.connect(f"file:{p}?mode=ro", uri=True) as con:
+            r = con.execute("SELECT user_id FROM sessions WHERE id = ? LIMIT 1",
+                            (sid,)).fetchone()
+        return (r[0] or "") if r else ""
+    except Exception:
+        return ""
 NED_TIL = float(os.environ.get("HELIX_COMPRESS_NED_TIL", "0.60"))
 TÆRSKEL = float(os.environ.get("HELIX_COMPRESS_TÆRSKEL", "0.90"))
 LÅS = threading.Lock()   # to ture må ikke tømme samme historik samtidig
@@ -99,6 +142,7 @@ class HelixCompression(ContextEngine):
     # --------------------------------------------------------------- flytning
     def _flyt(self, historik: list[dict]) -> tuple[int, str]:
         """Send de ældste beskeder råt til Lillehjernen. Returnerer (antal, svar)."""
+        ejer_id = _ejer_for_session()
         kilder = []
         for i, m in enumerate(historik):
             tekst = _rens(m.get("content") if isinstance(m.get("content"), str) else "")
@@ -114,7 +158,11 @@ class HelixCompression(ContextEngine):
             if rolle == "assistant":
                 continue
             kilder.append({"id": f"hist-{i}", "tekst": tekst,
-                           "type": "samtale", "taler": "Danny"})
+                           "type": "samtale",
+                           # DNA 2026-11-15: taleren er brugeren, ikke et fast
+                           # navn. Bruger-id'et kommer fra sessionen.
+                           "ejer": ejer_id,
+                           "taler": _navn_for(ejer_id)})
         if not kilder:
             return 0, "intet at flytte"
         krop = json.dumps({"kilder": kilder}).encode()
@@ -130,6 +178,7 @@ class HelixCompression(ContextEngine):
         (memory-filerne) må ikke blive hængende i Hermes — den skal ind i hjernen.
         """
         rod = os.environ.get("HERMES_MEMORY_DIR", os.path.expanduser("~/.hermes/memories"))
+        ejer_id = _ejer_for_session()
         kilder = []
         for navn in MEMORY_FILER:
             sti = os.path.join(rod, navn)
@@ -146,8 +195,10 @@ class HelixCompression(ContextEngine):
                 "id": f"memory-{navn.split('.')[0].lower()}",
                 "tekst": tekst,
                 "type": "samtale",
-                "ejer": "hermes",
-                "taler": "Danny",   # fakta om DNA, sagt af DNA
+                "ejer": ejer_id,
+                # DNA 2026-11-15: MEMORY.md og USER.md er brugerens egne
+                # filer — navnet slaas op, det hardcodes ikke.
+                "taler": _navn_for(ejer_id),
             })
         if not kilder:
             return 0, "ingen memory-filer"
