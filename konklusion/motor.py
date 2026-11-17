@@ -468,6 +468,38 @@ def sikr_skema(con):
             CREATE INDEX IF NOT EXISTS konklusion_emne_idx
             ON konklusion (emne, egenskab, oprettet DESC)
         """)
+        # EMNE-SYSTEMET (DNA 17. nov 2026): kolonnerne og de to tabeller blev
+        # lagt ind i DNA's base i HÅNDEN 16. nov og naaede aldrig koden. En
+        # frisk installation (og testbasen) fik dem derfor ikke, og saa kunne
+        # emne-systemet ikke koere der. Nu oprettes de her, som alt andet.
+        #   emne_gruppe — hvilken slags viden (boernesag/teknik/jura/...)
+        #   taler       — hvem der sagde det (Danny/Helix/Hanne/...)
+        cur.execute("""
+            ALTER TABLE konklusion ADD COLUMN IF NOT EXISTS emne_gruppe text
+        """)
+        cur.execute("""
+            ALTER TABLE konklusion ADD COLUMN IF NOT EXISTS taler text
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS konklusion_emne_gruppe_idx
+            ON konklusion (emne_gruppe) WHERE emne_gruppe IS NOT NULL
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS emne (
+                id       serial PRIMARY KEY,
+                navn     text NOT NULL UNIQUE,
+                kategori text NOT NULL,
+                oprettet timestamptz NOT NULL DEFAULT now()
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS session_emne (
+                session_id text NOT NULL,
+                emne       text NOT NULL,
+                sat        timestamptz NOT NULL DEFAULT now(),
+                PRIMARY KEY (session_id)
+            )
+        """)
         # FUNDAMENT (DNA 4. nov 2026): den samme konklusion maa kun findes ÉN
         # gang pr. ejer. Reglen ligger i databasen, ikke i koden — saa kan
         # ingen kode, nu eller senere, lave dubletter. Maalt foer: 1351 raekker,
@@ -513,13 +545,35 @@ def sikr_skema(con):
 
 
 def gem_konklusion(con, k: dict):
+    # DNA 2026-11-17: EMNET SAETTES NAAR RAEKKEN GEMMES — ikke af et script
+    # nogen skal huske at koere. Maalt: 48.679 raekker stod som "ukendt" og
+    # svarede i alle samtaler, fordi `emner.py --klassificer` kun koerte naar
+    # den blev kaldt i haanden. Reglen er den samme som i emner.py.
+    if not k.get("emne_gruppe"):
+        try:
+            from konklusion.emner import vaelg_emne as _va
+        except Exception:
+            try:
+                from emner import vaelg_emne as _va
+            except Exception:
+                _va = None
+        if _va is not None:
+            k["emne_gruppe"] = _va(k.get("kilde_tekst") or "") or "ukendt"
+        else:
+            k["emne_gruppe"] = "ukendt"
+    # DNA 2026-11-15: VEKTOREN SKAL MED, ELLERS KAN KONKLUSIONEN IKKE SOEGES.
+    # INSERT'en skrev aldrig vektoren. Kun de 4.481 aeldste raekker havde en —
+    # de 14.739 nyere var usoegbare. Fundet ved at soege paa en GPU-raekkefoelge
+    # der var gemt faa sekunder foer: den kunne ikke findes.
+    _v = embed(k["kilde_tekst"])
     with con.cursor() as cur:
         cur.execute("""
             INSERT INTO konklusion
               (emne, egenskab, vaerdi, form, bevis, regel, kilde_id,
                kilde_tekst, slags, sikkerhed, modsigelse_id, ejer, agent,
-               dokument, side_deres, side_vores, gyldig_fra)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+               dokument, side_deres, side_vores, gyldig_fra, vektor,
+               emne_gruppe, taler)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             ON CONFLICT (emne, egenskab, coalesce(vaerdi,''), coalesce(ejer,''),
                          coalesce(dokument,''), coalesce(side_vores,0),
                          coalesce(side_deres,''))
@@ -535,7 +589,10 @@ def gem_konklusion(con, k: dict):
             # fortsaetter konklusionerne under den nye models ID.
             k.get("agent") or "helix",
             k.get("dokument"), k.get("side_deres"), k.get("side_vores"),
-            k.get("gyldig_fra"),
+            k.get("gyldig_fra"), _v,
+            # DNA 2026-11-17: de to felter under emne-systemet blev ALDRIG
+            # skrevet — samme fejl som vektoren havde. sat af gem_konklusion.
+            k.get("emne_gruppe") or "ukendt", k.get("taler"),
         ))
         # Hændelsesstyring (DNA 2. nov 2026): sig til i samme sekund en
         # konklusion lander, så broen kan vågne med det samme i stedet for at
@@ -576,11 +633,22 @@ def _navn_for(con, ejer: str | None) -> str | None:
     """
     if not ejer or ejer.startswith("bruger:"):
         return None
+    # DNA 2026-11-15: brugertabellen ligger i OpenWebUI's database, men
+    # PostgreSQL kan ikke slaa op paa tvaers af databaser. En SELECT mod
+    # "helix_main_db.public.user" kaster "cross-database references are not
+    # implemented" — og fejlen stoppede HELE konklusionen, saa intet blev gemt
+    # paa en frisk installation. Vi spoerger derfor foerst om databasen findes.
     try:
         with con.cursor() as cur:
-            cur.execute("""SELECT name FROM helix_main_db.public."user"
-                           WHERE id = %s LIMIT 1""", (ejer,))
-            r = cur.fetchone()
+            cur.execute("""SELECT 1 FROM pg_database WHERE datname = 'helix_main_db'""")
+            if not cur.fetchone():
+                return None
+        import psycopg as _pg
+        dsn = DSN.replace("dbname=hjerne", "dbname=helix_main_db")
+        with _pg.connect(dsn, autocommit=True) as c2, c2.cursor() as cur2:
+            cur2.execute('SELECT name FROM public."user" WHERE id = %s LIMIT 1',
+                         (ejer,))
+            r = cur2.fetchone()
         return ((r[0] or "").strip() or None) if r else None
     except Exception:
         return None
@@ -630,6 +698,11 @@ def regel_laeser(con, tekst, kilde_id, kilde_type, taler=None,
             "regel": "laeser.ordret",
             "kilde_id": kilde_id,
             "kilde_tekst": f.get("tekst") or f["sats"],
+            # DNA 2026-11-17: TALEREN SKAL MED HELT UD I RAEKKEN.
+            # Den blev fundet i udled() og brugt til at erstatte "jeg" —
+            # men naaede aldrig kolonnen, saa enhver konklusion stod uden
+            # ansvar for hvis ord det var. Maalt: alle raekker havde taler=NULL.
+            "taler": taler,
             "slags": f.get("slags"),
             "dokument": f.get("dokument"),
             "side_deres": f.get("side_deres"),
@@ -1072,7 +1145,7 @@ class Handler(BaseHTTPRequestHandler):
                 cur.execute("""
                     SELECT emne, egenskab, vaerdi, form, bevis, regel, oprettet
                     FROM konklusion
-                    WHERE NOT ugyldig
+                    WHERE NOT ugyldig AND overhalet_af IS NULL
                     ORDER BY oprettet DESC LIMIT %s
                 """, (gr,))
                 return self._json({"konklusioner": [
@@ -1117,8 +1190,25 @@ class Handler(BaseHTTPRequestHandler):
             ]
             if not kilder:
                 return self._json({"fejl": "ingen kilder"}, 400)
-            return self._json(udled(self.con, kilder,
-                                    tael_samlet=bool(data.get("samlet"))))
+            # DNA 2026-11-17: EMNESYSTEM. Foer hver tur tjekkes om brugeren
+            # naevner et emne ved navn ("dios sag", "docker"). Goer han det,
+            # saettes sessionens emne. Det er ikke et gaet — det er hans ord.
+            # Er der flere eller ingen, sker der intet, og Helix spoerger.
+            _emne = None
+            _sid = data.get("session_id") or ""
+            if _sid:
+                try:
+                    from emne import opdater_fra_tur, hent_emne
+                    _tekst = " ".join(k["tekst"] for k in data.get("kilder", []))
+                    opdater_fra_tur(_sid, _tekst)
+                    _emne = hent_emne(_sid)
+                except Exception:
+                    _emne = None
+            svar = udled(self.con, kilder,
+                         tael_samlet=bool(data.get("samlet")))
+            if _emne:
+                svar["emne"] = {"navn": _emne[0], "kategori": _emne[1]}
+            return self._json(svar)
 
         return self._json({"fejl": "ukendt sti"}, 404)
 

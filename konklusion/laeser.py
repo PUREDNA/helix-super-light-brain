@@ -35,7 +35,19 @@ TOM = {
     "disse", "noget", "nogen", "alt", "alle", "ingen", "intet",
 }
 
-SPOERGSMAAL = re.compile(r"\?\s*$")
+SPOERGSMAAL = re.compile(
+    r"\?\s*$"
+    # DNA 2026-11-17: en TALT saetning faar sjaeldent spoergsmaalstegn — Whisper
+    # saetter ikke tegn. "Er der elleve filer..." blev derfor gemt som en
+    # kendsgerning. Spoergsmaalet afgoeres nu ogsaa paa FORMEN: en saetning
+    # der BEGYNDER med et spoergende ord er et spoergsmaal.
+    # Ordgraensen \b efter GRUPPEN er ikke nok: "Vilhelm" ramte "vil". Derfor
+    # et krav om at naeste tegn er mellemrum eller slutning.
+    r"|^\s*(er|har|kan|skal|vil|maatte|må|hvad|hvem|hvor|hvornaar|hvornår|"
+    r"hvorfor|hvordan|hvilken|hvilket|hvilke|var|blev|kommer|gør|goer)"
+    r"(?=\s|$)",
+    re.I,
+)
 # Systemsnak er ikke altid skrald (DNA 3. nov 2026). Et dagsbrev, en opgaveliste
 # eller en fejlbesked er MASKINE der taler — ikke Danny. Men en sætning om at
 # "motoren kører på port 6305" ER en kendsgerning. Derfor skelnes der:
@@ -136,11 +148,37 @@ ORDRE = re.compile(
 # "Danny tjekker om den har de nye rettelser" beskriver hvad vi gjorde i
 # samtalen — ikke hvordan verden er. En model der laeser det senere tror det
 # er en kendsgerning. Kun saetninger der beskriver en tilstand maa gemmes.
+# DNA 2026-11-17: denne regel spiste DNA's egne praeferencer og aftaler.
+# "Danny kan godt lide kaffe" / "Danny skal til moede tirsdag" blev kastet,
+# fordi verbet "kan"/"skal" stod efter navnet. Reglen skal KUN fange hvad
+# der bliver gjort NU i samtalen (nutid, arbejdsgang) — ikke hvad nogen
+# kan, skal eller vil. De tre er praecis den slags viden der skal huskes.
 ARBEJDSNOTE = re.compile(
     r"^(danny|helix|jeg|vi|han|hun|de)\s+"
     r"(tjekker|finder|proever|ser|kigger|koerer|retter|bygger|"
-    r"laver|saetter|venter|skal|vil|kan|goer|siger|faar|tager)\b"
+    r"laver|saetter|venter|goer|tager)\b"
+    # DNA 2026-11-17: FOERNUUTID er FORSOEGT og RULLET TILBAGE. Reglen
+    # "^(jeg|vi) har <verbum>et" fangede "Jeg har rettet laeseren" — men den
+    # kastede ogsaa "Jeg har boet i Portugal" og "Danny har faaet en ny
+    # sagsbehandler", som er rigtig viden. At fjerne viden for at fjerne
+    # arbejdssnak er en daarlig handel. Arbejdssnak i foernutid maa i stedet
+    # fanges af ARBEJDSSVAR nedenfor, der kraever ET ARBEJDSORD (fil, kode,
+    # test, rette) i saetningen — ikke kun en boejning.
     r"|^(nu|saa|sådan|derfor|ellers|imens|bagefter)\s",
+    re.I,
+)
+
+
+# DNA 2026-11-17: AI'ENS ARBEJDSSVAR I FOERNUUTID.
+# "Jeg har rettet laeseren og testet den" er ikke viden om verden. Reglen
+# kraever ET ARBEJDSORD i saetningen — fil, kode, test, rette, bygge — saa
+# den ikke rammer "Jeg har boet i Portugal" eller "Danny har faaet en ny
+# sagsbehandler", som ER viden. Boejningen alene var nok tidligere og tog
+# begge de rigtige med; det er derfor ordet skal vaere der.
+ARBEJDSSVAR = re.compile(
+    r"\b(rettet|rettede|bygget|byggede|testet|testede|koert|koerte|aendret|"
+    r"aendrede|slettet|slettede|committet|pushet|genstartet|"
+    r"filen|filerne|koden|scriptet|testen|imaget|containeren)\b",
     re.I,
 )
 
@@ -152,6 +190,11 @@ def _har_substans(t: str) -> bool:
     "Dio bor i Brondby" har baade navn og sted.
     """
     if re.search(r"\d", t):                      # tal, dato, portnummer
+        return True
+    # DNA 2026-11-17: "Jeg kan godt lide kaffe" blev kastet fordi "jeg" ikke
+    # er et navn. Men naar vi ved HVEM der taler, ER "jeg" et navn — det er
+    # hans egen praeference, og den skal huskes. Personen taeller som substans.
+    if re.search(r"\b(jeg|mig|min|mit|mine)\b", t, re.I):
         return True
     # Egennavn — men ikke et almindeligt ord blot fordi det staar foerst.
     if re.search(r"\b(?!(?:Der|Det|Den|Jeg|Du|Vi|Han|Hun|De|Nu|Saa|Så|Men|Og|"
@@ -259,6 +302,13 @@ def er_samtalestoej(tekst: str) -> bool:
         return True
     # Arbejdsnoter om hvad vi gjorde i samtalen er heller ikke viden.
     if ARBEJDSNOTE.search(t):
+        return True
+    # DNA 2026-11-17: AI'ENS EGET ARBEJDE I FOERNUUTID. Kun naar saetningen
+    # handler om arbejdet OG har et arbejdsord. "Jeg har rettet filen" ud,
+    # "Jeg har boet i Portugal" ind.
+    if (re.match(r"^(jeg|vi|helix)\b", t, re.I)
+            and re.search(r"\b(har|havde)\b", t, re.I)
+            and ARBEJDSSVAR.search(t)):
         return True
     # DNA 2026-11-13: en saetning uden navn, tal eller sted er ikke viden.
     # "Der er grafen." / "Sa broen peger paa tom luft." beskriver ingenting
@@ -631,7 +681,7 @@ MAILHOVED_KONVOLUT = re.compile(
 # DNA 5. nov 2026: FELTRÆKKE. "Personnummer Adresse Tværvej 8 4573 Højby
 # Telefonnummer 50205203" er en udfyldt blanket, ikke en sætning.
 FELTNAVN = re.compile(
-    r"\b(personnummer|cpr[- ]?nr|adresse|telefonnummer|postnummer|"
+    r"\b(personnummer|cpr[- ]?nr|cpr|adresse|telefonnummer|postnummer|"
     r"efternavn|fornavn|fødselsdato|nationalitet|statsborgerskab|"
     r"civilstand|beskæftigelse|indkomst|formue)\b",
     re.I,
@@ -664,9 +714,23 @@ def er_rest(saetning: str) -> bool:
     # En kort saetning MED udsagn er en rigtig konklusion ("Ut svarede ja").
     if len(t.split()) <= 4:
         ord_ = re.findall(r"[A-Za-zÆØÅæøå]{3,}", t)
-        if len(ord_) <= 3 and not re.search(
-                r"\b(er|har|kan|skal|vil|blev|bliver|var|siger|sagde|gav|får|"
-                r"fik|kom|gik|tog|ser|så|vurderer|skriver|mener|bor)\b", t, re.I):
+        # DNA 2026-11-17: listen over verber var haandskrevet og ufuldstaendig
+        # — "Vilhelm arbejder paa Bagsvaerd" blev kastet fordi "arbejder" ikke
+        # stod paa den. Vi spoerger nu spaCy om der ER et verbum i saetningen;
+        # den liste kan ikke komme ud af trit med sproget.
+        _verbum = bool(re.search(
+            r"\b(er|har|kan|skal|vil|blev|bliver|var|siger|sagde|gav|får|"
+            r"fik|kom|gik|tog|ser|så|vurderer|skriver|mener|bor)\b", t, re.I))
+        if not _verbum:
+            try:
+                from laeser import _model
+                _nlp = _model()
+                if _nlp is not None:
+                    _doc = _nlp(t)
+                    _verbum = any(x.pos_ in ("VERB", "AUX") for x in _doc)
+            except Exception:
+                pass
+        if len(ord_) <= 3 and not _verbum:
             return True
     return False
 
@@ -762,7 +826,7 @@ def laes(tekst: str, taler: str | None = None,
     if dokument and er_mail(_raa):
         for _e in (m.strip() for m in EMNELINJE.findall(_raa)):
             if _e:
-                _k = _en_konklusion(_e, taler, None, dokument, side,
+                _k = _en_konklusion(_e, taler, None, dokument, side, lytter_navn=navn,
                                     slags="EMAIL_EMNE")
                 if _k:
                     _emne_fund.append(_k)
@@ -815,7 +879,8 @@ def _ordrette(tekst: str, doc, taler: str | None,
             for _e in EMNELINJE.findall(_t0):
                 if _e.strip():
                     fund.append(_en_konklusion(_e.strip(), taler, None,
-                                               dokument, side, slags="EMAIL_EMNE"))
+                                               dokument, side, slags="EMAIL_EMNE",
+                                               lytter_navn=lytter_navn))
             _t0 = MAILHOVED_KONVOLUT.sub(" ", _t0)
             _t0 = EMNELINJE.sub(" ", _t0)
         for raw in re.split(r"(?<=[.!?])\s+", _t0.strip()):
@@ -825,7 +890,8 @@ def _ordrette(tekst: str, doc, taler: str | None,
             if (er_samtalestoej(raw) or er_papir(raw)
                     or er_tomsnak(raw) or er_halv(raw)):
                 continue
-            fund.append(_en_konklusion(raw, taler, None, dokument, side))
+            fund.append(_en_konklusion(raw, taler, None, dokument, side,
+                                            lytter_navn=lytter_navn))
         return [f for f in fund if f]
 
     # DNA 5. nov 2026: EN HILSEN I STARTEN MAER ALDRIG KOSTE RESTEN AF BESKEDEN.
@@ -858,14 +924,16 @@ def _ordrette(tekst: str, doc, taler: str | None,
             _u = HILSEN_FORAN.sub("", raw).strip()
             if (_u and _u != raw and not er_samtalestoej(_u)
                     and not er_papir(_u) and not er_tomsnak(_u) and not er_halv(_u)):
-                fund.append(_en_konklusion(_u, taler, None, dokument, side))
+                fund.append(_en_konklusion(_u, taler, None, dokument, side,
+                                            lytter_navn=lytter_navn))
                 continue
             if not _hele and len(saetninger) > 1:
                 continue
             for _d in re.split(r"(?<=[.!?])\s+", raw):
                 _d = _d.strip()
                 if len(_d) >= 3 and not er_samtalestoej(_d) and not er_papir(_d):
-                    fund.append(_en_konklusion(_d, taler, None, dokument, side))
+                    fund.append(_en_konklusion(_d, taler, None, dokument, side,
+                                            lytter_navn=lytter_navn))
             continue
         # PAPIR og TOM SNAK (DNA 4. nov 2026): sidetal og fyld er ikke viden.
         # DNA 5. nov 2026: RESTER — trykte felter, KLE-koder, tabelhoveder,

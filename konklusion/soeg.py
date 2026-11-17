@@ -125,7 +125,8 @@ def indekser(con, graense: int = 500, parti: int = 25) -> int:
     return n
 
 
-def soeg(con, spoergsmaal: str, antal: int = 8, ejer: str | None = None) -> list[dict]:
+def soeg(con, spoergsmaal: str, antal: int = 8, ejer: str | None = None,
+         session_id: str | None = None) -> list[dict]:
     """Find de konklusioner der svarer på spørgsmålet — tre spor, ikke ét.
 
     DNA 2026-11-08 (hybrid): vektor alene taber på navne og tal, fordi
@@ -144,6 +145,21 @@ def soeg(con, spoergsmaal: str, antal: int = 8, ejer: str | None = None) -> list
     spoergsmaal = (spoergsmaal or "").strip()
     if not spoergsmaal:
         return []
+    # Konklusionen baerer kategorien; sessionen baerer emnet. Vi filtrerer
+    # paa kategorien — saa en samtale om Dios sag kun faar boernesags-viden,
+    # og en samtale om teknik kun faar teknisk viden.
+    _kategori = ""
+    if session_id:
+        try:
+            from emne import hent_emne as _he
+            _e = _he(session_id)
+            _kategori = _e[1] if _e else ""
+        except Exception:
+            _kategori = ""
+    emne_sql = " AND emne_gruppe = %s" if _kategori else ""
+    # Variant til de forespoergsler der bruger alias k.
+    emne_sql_k = " AND k.emne_gruppe = %s" if _kategori else ""
+    emne_par = [_kategori] if _kategori else []
     # DNA 2026-11-08 (SKRALD-FILTER): «Neo | bruge | værktøjer» er en rigtig
     # konklusion fra en rigtig sætning, men den svarer ikke på «Nikolaj Vinter».
     # En række hvis EMNE intet ord deler med spørgsmålet droppes — undtagen når
@@ -161,11 +177,11 @@ def soeg(con, spoergsmaal: str, antal: int = 8, ejer: str | None = None) -> list
         sql_v = f"""
             SELECT id, 1 - (vektor <=> %s::vector) AS lighed
             FROM konklusion
-            WHERE vektor IS NOT NULL AND ugyldig = false{ejer_sql}
+            WHERE vektor IS NOT NULL AND ugyldig = false AND overhalet_af IS NULL{emne_sql}{ejer_sql}
             ORDER BY vektor <=> %s::vector
             LIMIT %s
         """
-        spor_v = [(r[0], r[1]) for r in _k(con, sql_v, [vlit] + ejer_par + [vlit, PER_SPOR])]
+        spor_v = [(r[0], r[1]) for r in _k(con, sql_v, [vlit] + emne_par + ejer_par + [vlit, PER_SPOR])]
         # Ligheværdien gemmes: RRF kaster scoren væk og beholder kun rækkefølgen,
         # så uden den kan vi ikke se om «nærmeste af 70.000» er et rigtigt træf.
         _lighed = {kid: float(s) for kid, s in spor_v}
@@ -180,23 +196,23 @@ def soeg(con, spoergsmaal: str, antal: int = 8, ejer: str | None = None) -> list
     sql_o_and = f"""
         SELECT id, ts_rank_cd(soege_tsv, q) AS rang
         FROM konklusion, plainto_tsquery('danish', %s) q
-        WHERE soege_tsv @@ q AND ugyldig = false{ejer_sql}
+        WHERE soege_tsv @@ q AND ugyldig = false AND overhalet_af IS NULL{emne_sql}{ejer_sql}
         ORDER BY rang DESC
         LIMIT %s
     """
     sql_o_or = f"""
         SELECT id, ts_rank_cd(soege_tsv, q) AS rang
         FROM konklusion, to_tsquery('danish', %s) q
-        WHERE soege_tsv @@ q AND ugyldig = false{ejer_sql}
+        WHERE soege_tsv @@ q AND ugyldig = false AND overhalet_af IS NULL{emne_sql}{ejer_sql}
         ORDER BY rang DESC
         LIMIT %s
     """
-    spor_o = _k(con, sql_o_and, [spoergsmaal] + ejer_par + [PER_SPOR])
+    spor_o = _k(con, sql_o_and, [spoergsmaal] + emne_par + ejer_par + [PER_SPOR])
     if not spor_o:
         # plainto_tsquery binder ordene med AND; to_tsquery med | giver OR.
         _eller = " | ".join(_ord) if _ord else ""
         if _eller:
-            spor_o = _k(con, sql_o_or, [_eller] + ejer_par + [PER_SPOR])
+            spor_o = _k(con, sql_o_or, [_eller] + emne_par + ejer_par + [PER_SPOR])
 
     # ---- spor 3: trigram (stavefejl, felthørte navne) -------------------
     # Sammenlign ORD for ORD, ikke hele sætningen mod hele sætningen:
@@ -208,20 +224,20 @@ def soeg(con, spoergsmaal: str, antal: int = 8, ejer: str | None = None) -> list
     sql_t = f"""
         WITH emner AS (
             SELECT DISTINCT emne FROM konklusion
-            WHERE emne %% ANY(%s::text[]) AND ugyldig = false{ejer_sql}
+            WHERE emne %% ANY(%s::text[]) AND ugyldig = false AND overhalet_af IS NULL{ejer_sql}
             LIMIT 400
         )
         SELECT k.id, max(similarity(ord, k.emne)) AS lighed
         FROM konklusion k
         JOIN emner e ON e.emne = k.emne,
              unnest(%s::text[]) AS ord
-        WHERE k.ugyldig = false
+        WHERE k.ugyldig = false AND k.overhalet_af IS NULL{emne_sql_k}
         GROUP BY k.id
         HAVING max(similarity(ord, k.emne)) > 0.4
         ORDER BY lighed DESC
         LIMIT %s
     """
-    spor_t = _k(con, sql_t, [_ord] + ejer_par + [_ord, PER_SPOR])
+    spor_t = _k(con, sql_t, [_ord] + ejer_par + [_ord] + emne_par + [PER_SPOR])
 
     # ---- fusion (RRF) ---------------------------------------------------
     point: dict = {}
@@ -292,10 +308,12 @@ def soeg(con, spoergsmaal: str, antal: int = 8, ejer: str | None = None) -> list
                    and _lighed[k] >= _VEKTOR_GULV]
         if _staerk:
             valgt = _staerk[:antal]
-        elif _naer:
-            return []
         else:
-            valgt = [(k, p) for k, p in bedste if k in raekker][:antal]
+            # DNA 2026-11-16: FOER var der en gren der lukkede op for ALT naar
+            # intet staerkt match fandtes. Det var dér skraldet kom ind —
+            # "godmorgen" gav en svensk saetning om fosterhjem. Nu: intet
+            # staerkt match = intet svar. Hellere tomt end forkert.
+            return []
     # ENS RÆKKE ÉN GANG (målt 2026-11-08): samme konklusion kan optræde flere
     # gange i basen (ulige store mellemrum i nøglen), og den blev vist 4 gange.
     set_ = set()
