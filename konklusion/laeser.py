@@ -203,6 +203,19 @@ def _har_substans(t: str) -> bool:
         return True
     if len(t.split()) >= 8:                      # lang nok til at baere indhold
         return True
+    # DNA 2026-11-17: "Vi skal til moede tirsdag" og "kommunen fejlede" blev
+    # kastet som tomsnak. Der ER substans: en ugedag, en institution, et
+    # ord der kun giver mening i en sag. Vi kraever ikke laengere et stort
+    # begyndelsesbogstav for at tro paa saetningen.
+    if re.search(r"\b(mandag|tirsdag|onsdag|torsdag|fredag|loerdag|lørdag|"
+                 r"sondag|søndag|januar|februar|marts|april|maj|juni|juli|"
+                 r"august|september|oktober|november|december)\b", t, re.I):
+        return True
+    if re.search(r"\b(kommunen|kommunalbestyrelsen|ankestyrelsen|"
+                 r"familieretshuset|statsforvaltningen|domstolen|retten|"
+                 r"sagsbehandleren|advokaten|plejefamilien|institutionen|"
+                 r"samvaeret|samværet|afgoerelsen|afgørelsen)\b", t, re.I):
+        return True
     return False
 
 
@@ -340,6 +353,61 @@ def er_samtalestoej(tekst: str) -> bool:
     if ISLANDSK.search(t):
         return True
     return False
+
+
+_PRONOMEN = {"han", "hun", "det", "den", "de", "dem", "vi", "jeg", "du",
+             "man", "sig", "os", "ham", "hende"}
+
+
+def _emne_fra_subjekt(sent, tok, navn: str, hele=None) -> str | None:
+    """Hvilken TING handler saetningen om?
+
+    DNA 2026-11-17: et pronomen er ikke et emne. Maalt paa basen stod 3.831
+    raekker med emne "han", "det", "vi" — de kan ikke soeges paa, fordi der
+    ikke er noget at soege efter. Reglen:
+      1. Er subjektet et egennavn eller navnefrase -> brug den.
+      2. Er det et pronomen -> find naermeste egennavn i samme saetning.
+      3. Findes intet -> brug talerens navn (det er hans udsagn om sig selv
+         eller om verden, og det er sandt nok til at kunne slaa op).
+    """
+    tekst = (tok.text or "").strip()
+    if tekst.lower() not in _PRONOMEN and not (tok.pos_ == "PRON"):
+        return _navn(tok)
+    # 2. naermeste egennavn FORAN pronominet — det er dér det peger hen.
+    # DNA 2026-11-17: to fejl her, begge maalt:
+    #   - jeg tog ogsaa ord til hoejre, saa "Hun bor i Koebenhavn" blev
+    #     emnet Koebenhavn. Et pronomen peger altid bagud.
+    #   - jeg skar med tok.i, som er DOKUMENT-indeks, paa en SAETNING — det
+    #     ramte uden for saetningen og gav tilfaeldige ord.
+    # Nu: kun saetningens egne tokens, kun dem der staar foer pronominet.
+    _i_sent = [x.i for x in sent].index(tok.i) if tok.i in [x.i for x in sent] else 0
+    for t in list(sent)[:_i_sent][::-1]:
+        if t.pos_ == "PROPN" or t.ent_type_ in ("PER", "ORG", "LOC", "GPE"):
+            return _navn(t)
+    # spaCy giver hele dokumentet via saetningen selv — ingen ekstra parameter.
+    # Det daekker tilfaeldet hvor pronominet peger paa en TIDLIGERE saetning:
+    # "Ditte er Dios mor. Hun bor i Koebenhavn." -> emne Ditte.
+    # tok.i ER dokument-indeks, saa her er det rigtigt at bruge det.
+    # DNA 2026-11-17: naermeste navn var "Dios" — en ejendel i en anden
+    # saetning. Et pronomen som subjekt peger paa det FORRIGE SUBJEKT, ikke
+    # paa hvad som helst der naevnes. Vi tager derfor subjektet i den
+    # naermeste foregaaende saetning foerst.
+    _doc = getattr(sent, "doc", None)
+    if _doc is not None and _doc is not sent:
+        _foer = [s for s in _doc.sents if s.end <= tok.i]
+        for _s in reversed(_foer):
+            for _t in _s:
+                if _t.dep_ in ("nsubj", "nsubj:pass") and (
+                        _t.pos_ == "PROPN"
+                        or _t.ent_type_ in ("PER", "ORG", "LOC", "GPE")):
+                    return _navn(_t)
+        for t in list(_doc)[:tok.i][::-1]:
+            if t.ent_type_ in ("PER", "ORG", "LOC", "GPE"):
+                return _navn(t)
+    # 3. taleren. "Jeg kan godt lide kaffe" -> emne "Danny", ikke "jeg".
+    if navn and navn.lower() not in ("", "ukendt"):
+        return navn
+    return None
 
 
 def _navn(tok) -> str:
@@ -1020,7 +1088,11 @@ def _en_konklusion(raw: str, taler: str | None, sent,
     if sent is not None:
         for t in sent:
             if t.dep_ in ("nsubj", "nsubj:pass"):
-                emne = navn if (t.text or "").lower() in ("jeg", "mig") else _navn(t)
+                # DNA 2026-11-17: pronomen er ikke emner. "han"/"det"/"vi"
+                # kan ikke slaaes op; de 3.831 saadanne raekker gjorde
+                # soegningen ubrugelig. _emne_fra_subjekt loeser pronominet
+                # op til naermeste navn, ellers til taleren.
+                emne = _emne_fra_subjekt(sent, t, navn)
                 break
         for t in sent:
             if t.pos_ == "VERB" and t.dep_ in ("ROOT", "conj"):

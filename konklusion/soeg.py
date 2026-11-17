@@ -153,8 +153,17 @@ def soeg(con, spoergsmaal: str, antal: int = 8, ejer: str | None = None,
         try:
             from emne import hent_emne as _he
             _e = _he(session_id)
+            # DNA 2026-11-17: SESSIONEN BAERER EMNET, RAEKKEN BAERER KATEGORIEN.
+            # hent_emne() giver (emne_navn, kategori) — fx ("dio", "boernesag").
+            # Filtreret spurgte tidligere efter emne_navnet ("dio"), men ingen
+            # raekke har den gruppe; raekkerne staar som "boernesag". Saa faldt
+            # det tilbage til ALT, og en teknik-samtale fik boernesags-svar.
+            # Kategorien er _e[1] — det er den raekkerne faktisk baerer.
             _kategori = _e[1] if _e else ""
-        except Exception:
+        except Exception as _fejl:
+            # Fejlen maa ikke sluges i tavshed — det var netop hvad der skete.
+            import sys as _sys
+            print(f"emne-filter faldt ud: {_fejl}", file=_sys.stderr)
             _kategori = ""
     emne_sql = " AND emne_gruppe = %s" if _kategori else ""
     # Variant til de forespoergsler der bruger alias k.
@@ -237,6 +246,13 @@ def soeg(con, spoergsmaal: str, antal: int = 8, ejer: str | None = None,
         ORDER BY lighed DESC
         LIMIT %s
     """
+    # DNA 2026-11-17: Raekkefoelgen SKAL foelge %s i SQL'en ovenfor:
+    #   $1 emne-array i CTE'en, {ejer_sql} sidst i CTE'en,
+    #   $2 ord-array i unnest, {emne_sql_k} i WHERE, $3 limit.
+    # En tidligere "rettelse" satte de to ord-lister foerst og emne bagefter;
+    # det gav "malformed array literal: teknik", fordi emne-teksten landede i
+    # et ::text[]-parameter. Den oprindelige raekkefoelge var den rigtige —
+    # fejlen laa i at _kategori blev laest som emne-navn i stedet for kategori.
     spor_t = _k(con, sql_t, [_ord] + ejer_par + [_ord] + emne_par + [PER_SPOR])
 
     # ---- fusion (RRF) ---------------------------------------------------
